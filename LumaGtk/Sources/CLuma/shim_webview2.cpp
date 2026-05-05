@@ -327,6 +327,13 @@ luma_monaco_view_load_uri(LumaMonacoView *view, const char *uri)
 }
 
 void
+luma_monaco_view_set_overlay_visible(LumaMonacoView *view, bool visible)
+{
+    (void)view;
+    (void)visible;
+}
+
+void
 luma_monaco_view_evaluate(LumaMonacoView *view, const char *script_utf8)
 {
     if (view == nullptr || script_utf8 == nullptr) {
