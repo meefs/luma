@@ -162,8 +162,7 @@ public final class MonacoEditor {
     }
 
     private func setTextScript(_ text: String) -> String {
-        let b64 = text.data(using: .utf8)?.base64EncodedString() ?? ""
-        return "editor.setText(atob('\(b64)'));"
+        return "editor.setText(\(javaScriptUTF8Decode(text)));"
     }
 
     private func snapshotScript(_ snapshot: EditorFSSnapshot?) -> String? {
@@ -268,8 +267,12 @@ extension EditorCompilerOptions {
 
 extension EditorExtraLib {
     fileprivate func toJavaScriptObjectLiteral() -> String {
-        let b64 = content.data(using: .utf8)?.base64EncodedString() ?? ""
         let escapedPath = filePath.replacingOccurrences(of: "'", with: "\\'")
-        return "{ content: atob('\(b64)'), filePath: '\(escapedPath)' }"
+        return "{ content: \(javaScriptUTF8Decode(content)), filePath: '\(escapedPath)' }"
     }
+}
+
+private func javaScriptUTF8Decode(_ text: String) -> String {
+    let b64 = text.data(using: .utf8)?.base64EncodedString() ?? ""
+    return "new TextDecoder().decode(Uint8Array.from(atob('\(b64)'), c => c.charCodeAt(0)))"
 }
