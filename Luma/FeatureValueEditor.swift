@@ -8,7 +8,7 @@ struct FeatureValueEditor: View {
     var body: some View {
         switch schema {
         case .boolean:
-            Toggle("", isOn: boolBinding).labelsHidden().toggleStyle(.checkbox)
+            Toggle("", isOn: boolBinding).labelsHidden().platformCheckboxToggleStyle()
         case .int(_, let lo, let hi):
             integerEditor(min: lo, max: hi, signed: true)
         case .uint(_, let lo, let hi):
@@ -113,7 +113,7 @@ struct FeatureValueEditor: View {
             Toggle(isOn: enabled) {
                 Text(field.name).font(.system(.caption, design: .monospaced))
             }
-            .toggleStyle(.checkbox)
+            .platformCheckboxToggleStyle()
             if enabled.wrappedValue, case .boolean = field.schema {
                 EmptyView()
             } else if enabled.wrappedValue {

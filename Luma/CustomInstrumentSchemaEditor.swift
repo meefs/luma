@@ -480,11 +480,11 @@ private struct ObjectFieldRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if !isBooleanSchema {
                         Toggle("Optional", isOn: $field.optional)
-                            .toggleStyle(.checkbox)
+                            .platformCheckboxToggleStyle()
                     }
                     if field.optional {
                         Toggle("Enabled by default", isOn: $field.enabledByDefault)
-                            .toggleStyle(.checkbox)
+                            .platformCheckboxToggleStyle()
                     }
                     CustomInstrumentSchemaEditor(schema: $field.schema)
                 }

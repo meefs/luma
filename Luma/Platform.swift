@@ -60,6 +60,15 @@ extension View {
             self.buttonStyle(.plain).foregroundStyle(.tint)
         #endif
     }
+
+    @ViewBuilder
+    func platformCheckboxToggleStyle() -> some View {
+        #if os(macOS)
+            self.toggleStyle(.checkbox)
+        #else
+            self.toggleStyle(.automatic)
+        #endif
+    }
 }
 
 struct PlatformHSplit<Left: View, Right: View>: View {

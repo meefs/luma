@@ -221,11 +221,11 @@ private struct FeatureRow: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if !isBooleanSchema {
                         Toggle("Optional (user can disable)", isOn: $feature.optional)
-                            .toggleStyle(.checkbox)
+                            .platformCheckboxToggleStyle()
                     }
                     if feature.optional {
                         Toggle("Enabled by default", isOn: $feature.enabledByDefault)
-                            .toggleStyle(.checkbox)
+                            .platformCheckboxToggleStyle()
                     }
                     CustomInstrumentSchemaEditor(schema: $feature.schema)
                 }
