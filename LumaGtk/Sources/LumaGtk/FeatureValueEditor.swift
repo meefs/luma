@@ -13,7 +13,7 @@ final class FeatureValueEditor {
     private let onChanged: (FeatureValue) -> Void
 
     private var childEditors: [FeatureValueEditor] = []
-    private var comboChoices: [String] = []
+    private var comboChoices: [ComboChoice] = []
 
     init(schema: FeatureSchema, value: FeatureValue, onChanged: @escaping (FeatureValue) -> Void) {
         self.schema = schema
@@ -69,7 +69,7 @@ final class FeatureValueEditor {
         let entry = Entry()
         entry.text = currentIntegerText(signed: signed)
         entry.placeholderText = "0"
-        entry.hexpand = true
+        entry.setSizeRequest(width: 140, height: -1)
         entry.onChanged { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.applyIntegerInput(entry.text ?? "", signed: signed)
@@ -77,6 +77,7 @@ final class FeatureValueEditor {
         }
         row.append(child: entry)
         appendBoundsHint(to: row)
+        appendTrailingSpacer(to: row)
         return row
     }
 
@@ -85,7 +86,7 @@ final class FeatureValueEditor {
         let entry = Entry()
         entry.text = currentDoubleText()
         entry.placeholderText = "0"
-        entry.hexpand = true
+        entry.setSizeRequest(width: 140, height: -1)
         entry.onChanged { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.applyDoubleInput(entry.text ?? "")
@@ -93,6 +94,7 @@ final class FeatureValueEditor {
         }
         row.append(child: entry)
         appendBoundsHint(to: row)
+        appendTrailingSpacer(to: row)
         return row
     }
 
@@ -100,7 +102,7 @@ final class FeatureValueEditor {
         let row = Box(orientation: .horizontal, spacing: 6)
         let entry = Entry()
         entry.text = currentString()
-        entry.hexpand = true
+        entry.setSizeRequest(width: 320, height: -1)
         if monospaced { entry.add(cssClass: "monospace") }
         entry.onChanged { [weak self] _ in
             MainActor.assumeIsolated {
@@ -108,27 +110,44 @@ final class FeatureValueEditor {
             }
         }
         row.append(child: entry)
+        appendTrailingSpacer(to: row)
         return row
     }
 
-    private func comboDropdown(choices: [String]) -> Box {
+    private func comboDropdown(choices: [ComboChoice]) -> Box {
         comboChoices = choices
         let row = Box(orientation: .horizontal, spacing: 6)
         row.append(child: makeComboDropdown(choices: choices))
+        appendTrailingSpacer(to: row)
         return row
     }
 
+    private func appendTrailingSpacer(to row: Box) {
+        let spacer = Label(str: "")
+        spacer.hexpand = true
+        row.append(child: spacer)
+    }
+
     private func objectEditor(fields: [ObjectField]) -> Box {
+        let card = Box(orientation: .vertical, spacing: 0)
+        card.add(cssClass: "card")
+        card.marginStart = 4
+        card.marginEnd = 4
+        card.marginTop = 4
+        card.marginBottom = 4
+        card.halign = .start
+        card.hexpand = false
+
         let column = Box(orientation: .vertical, spacing: 6)
-        column.add(cssClass: "card")
-        column.marginStart = 4
-        column.marginEnd = 4
-        column.marginTop = 4
-        column.marginBottom = 4
+        column.marginStart = 10
+        column.marginEnd = 10
+        column.marginTop = 10
+        column.marginBottom = 10
+        card.append(child: column)
 
         if fields.isEmpty {
             column.append(child: dimLabel("(no fields)"))
-            return column
+            return card
         }
 
         for field in fields {
@@ -138,39 +157,47 @@ final class FeatureValueEditor {
                 column.append(child: requiredObjectFieldRow(field: field))
             }
         }
-        return column
+        return card
     }
 
     private func requiredObjectFieldRow(field: ObjectField) -> Box {
         let row = Box(orientation: .horizontal, spacing: 8)
+        row.valign = .center
         let nameLabel = Label(str: field.name)
         nameLabel.halign = .start
+        nameLabel.valign = .center
         nameLabel.add(cssClass: "monospace")
         nameLabel.setSizeRequest(width: 120, height: -1)
         row.append(child: nameLabel)
 
-        let fieldName = field.name
-        let initialValue = currentObjectField(name: fieldName, schema: field.schema)
+        let fieldID = field.id
+        let initialValue = currentObjectField(id: fieldID, schema: field.schema)
         let editor = FeatureValueEditor(schema: field.schema, value: initialValue) { [weak self] newValue in
-            self?.applyObjectField(name: fieldName, value: newValue)
+            self?.applyObjectField(id: fieldID, value: newValue)
         }
         childEditors.append(editor)
+        editor.widget.valign = .center
+        editor.widget.hexpand = false
         row.append(child: editor.widget)
+
+        let spacer = Label(str: "")
+        spacer.hexpand = true
+        row.append(child: spacer)
         return row
     }
 
     private func optionalObjectFieldRow(field: ObjectField) -> Box {
         let column = Box(orientation: .vertical, spacing: 4)
         let header = Box(orientation: .horizontal, spacing: 8)
-        let fieldName = field.name
+        let fieldID = field.id
         let fieldSchema = field.schema
-        let isPresent = isObjectFieldPresent(name: fieldName)
+        let isPresent = isObjectFieldPresent(id: fieldID)
 
         let toggle = Switch()
         toggle.active = isPresent
         toggle.valign = .center
         header.append(child: toggle)
-        let nameLabel = Label(str: fieldName)
+        let nameLabel = Label(str: field.name)
         nameLabel.halign = .start
         nameLabel.add(cssClass: "monospace")
         nameLabel.hexpand = true
@@ -183,9 +210,9 @@ final class FeatureValueEditor {
         column.append(child: editorContainer)
 
         if !isBooleanSchema(fieldSchema) {
-            let initialValue = currentObjectField(name: fieldName, schema: fieldSchema)
+            let initialValue = currentObjectField(id: fieldID, schema: fieldSchema)
             let editor = FeatureValueEditor(schema: fieldSchema, value: initialValue) { [weak self] newValue in
-                self?.applyObjectField(name: fieldName, value: newValue)
+                self?.applyObjectField(id: fieldID, value: newValue)
             }
             childEditors.append(editor)
             editorContainer.append(child: editor.widget)
@@ -194,7 +221,7 @@ final class FeatureValueEditor {
         toggle.onStateSet { [weak self] _, state in
             MainActor.assumeIsolated {
                 guard let self else { return false }
-                self.setObjectFieldPresent(name: fieldName, schema: fieldSchema, present: state)
+                self.setObjectFieldPresent(id: fieldID, schema: fieldSchema, present: state)
                 editorContainer.visible = state && !self.isBooleanSchema(fieldSchema)
                 return false
             }
@@ -203,18 +230,18 @@ final class FeatureValueEditor {
         return column
     }
 
-    private func isObjectFieldPresent(name: String) -> Bool {
-        if case .object(let fields) = value { return fields[name] != nil }
+    private func isObjectFieldPresent(id: String) -> Bool {
+        if case .object(let fields) = value { return fields[id] != nil }
         return false
     }
 
-    private func setObjectFieldPresent(name: String, schema: FeatureSchema, present: Bool) {
+    private func setObjectFieldPresent(id: String, schema: FeatureSchema, present: Bool) {
         var fields: [String: FeatureValue] = [:]
         if case .object(let f) = value { fields = f }
         if present {
-            if fields[name] == nil { fields[name] = schema.defaultValue }
+            if fields[id] == nil { fields[id] = schema.defaultValue }
         } else {
-            fields.removeValue(forKey: name)
+            fields.removeValue(forKey: id)
         }
         value = .object(fields)
         onChanged(value)
@@ -287,7 +314,7 @@ final class FeatureValueEditor {
 
     fileprivate func applyComboSelection(_ index: Int) {
         guard index >= 0, index < comboChoices.count else { return }
-        value = .string(comboChoices[index])
+        value = .string(comboChoices[index].id)
         onChanged(value)
     }
 
@@ -318,8 +345,8 @@ final class FeatureValueEditor {
         return []
     }
 
-    private func currentObjectField(name: String, schema: FeatureSchema) -> FeatureValue {
-        if case .object(let fields) = value, let v = fields[name] {
+    private func currentObjectField(id: String, schema: FeatureSchema) -> FeatureValue {
+        if case .object(let fields) = value, let v = fields[id] {
             return v
         }
         return schema.defaultValue
@@ -375,10 +402,10 @@ final class FeatureValueEditor {
         onChanged(value)
     }
 
-    private func applyObjectField(name: String, value newValue: FeatureValue) {
+    private func applyObjectField(id: String, value newValue: FeatureValue) {
         var fields: [String: FeatureValue] = [:]
         if case .object(let f) = value { fields = f }
-        fields[name] = newValue
+        fields[id] = newValue
         value = .object(fields)
         onChanged(value)
     }
@@ -436,8 +463,8 @@ final class FeatureValueEditor {
         }
     }
 
-    private func makeComboDropdown(choices: [String]) -> DropDown {
-        let cStrings = choices.map { strdup($0) }
+    private func makeComboDropdown(choices: [ComboChoice]) -> DropDown {
+        let cStrings = choices.map { strdup($0.name) }
         defer { cStrings.forEach { free($0) } }
         var ptrs = cStrings.map { UnsafePointer($0) as UnsafePointer<CChar>? }
         ptrs.append(nil)
@@ -447,13 +474,13 @@ final class FeatureValueEditor {
         g_object_ref_sink(UnsafeMutableRawPointer(widgetPtr))
         let dropdown = DropDown(raw: UnsafeMutableRawPointer(widgetPtr))
         let initialIndex: Int = {
-            if case .string(let v) = value, let idx = choices.firstIndex(of: v) { return idx }
+            if case .string(let v) = value, let idx = choices.firstIndex(where: { $0.id == v }) { return idx }
             return 0
         }()
         if initialIndex < choices.count {
             dropdown.selected = initialIndex
         }
-        dropdown.hexpand = true
+        dropdown.halign = .start
 
         let context = Unmanaged.passUnretained(self).toOpaque()
         g_signal_connect_data(

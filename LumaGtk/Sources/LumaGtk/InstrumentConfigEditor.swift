@@ -137,6 +137,23 @@ final class InstrumentConfigEditor {
             if case .boolean = feature.schema {
                 return row
             }
+        } else if case .boolean = feature.schema {
+            let header = Box(orientation: .horizontal, spacing: 8)
+            header.hexpand = true
+            let editor = FeatureValueEditor(schema: feature.schema, value: initialValue) { [weak self] newValue in
+                self?.mutateCustom { cfg in
+                    let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
+                    cfg.features[fid] = FeatureState(enabled: existingEnabled, value: newValue)
+                }
+            }
+            customFeatureEditors.append(editor)
+            header.append(child: editor.widget)
+            let nameLabel = Label(str: feature.name)
+            nameLabel.halign = .start
+            nameLabel.hexpand = true
+            header.append(child: nameLabel)
+            row.append(child: header)
+            return row
         } else {
             let nameLabel = Label(str: feature.name)
             nameLabel.halign = .start
