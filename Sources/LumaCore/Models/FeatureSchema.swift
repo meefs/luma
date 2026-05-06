@@ -7,7 +7,7 @@ public enum FeatureSchema: Sendable, Equatable {
     case double(default: Double, min: Double?, max: Double?)
     case string(default: String)
     case regex(default: String)
-    case combo(choices: [String], default: String?)
+    case combo(choices: [ComboChoice], default: String?)
     case object(fields: [ObjectField])
     case array(item: ArrayItemSchema, default: [FeatureValue])
 
@@ -19,11 +19,11 @@ public enum FeatureSchema: Sendable, Equatable {
         case .double(let d, _, _): return .double(d)
         case .string(let d): return .string(d)
         case .regex(let d): return .regex(d)
-        case .combo(let choices, let d): return .string(d ?? choices.first ?? "")
+        case .combo(let choices, let d): return .string(d ?? choices.first?.id ?? "")
         case .object(let fields):
             let entries = fields.compactMap { field -> (String, FeatureValue)? in
                 guard !field.optional || field.enabledByDefault else { return nil }
-                return (field.name, field.schema.defaultValue)
+                return (field.id, field.schema.defaultValue)
             }
             return .object(Dictionary(uniqueKeysWithValues: entries))
         case .array(_, let d): return .array(d)
@@ -31,13 +31,31 @@ public enum FeatureSchema: Sendable, Equatable {
     }
 }
 
+public struct ComboChoice: Sendable, Equatable, Codable, Identifiable {
+    public var id: String
+    public var name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 public struct ObjectField: Sendable, Equatable, Codable {
+    public var id: String
     public var name: String
     public var schema: FeatureSchema
     public var optional: Bool
     public var enabledByDefault: Bool
 
-    public init(name: String, schema: FeatureSchema, optional: Bool = false, enabledByDefault: Bool = true) {
+    public init(
+        id: String,
+        name: String,
+        schema: FeatureSchema,
+        optional: Bool = false,
+        enabledByDefault: Bool = true
+    ) {
+        self.id = id
         self.name = name
         self.schema = schema
         self.optional = optional
@@ -52,7 +70,7 @@ public enum ArrayItemSchema: Sendable, Equatable {
     case double
     case string
     case regex
-    case combo(choices: [String])
+    case combo(choices: [ComboChoice])
     case object(fields: [ObjectField])
 
     public var defaultValue: FeatureValue {
@@ -63,11 +81,11 @@ public enum ArrayItemSchema: Sendable, Equatable {
         case .double: return .double(0)
         case .string: return .string("")
         case .regex: return .regex("")
-        case .combo(let choices): return .string(choices.first ?? "")
+        case .combo(let choices): return .string(choices.first?.id ?? "")
         case .object(let fields):
             let entries = fields.compactMap { field -> (String, FeatureValue)? in
                 guard !field.optional || field.enabledByDefault else { return nil }
-                return (field.name, field.schema.defaultValue)
+                return (field.id, field.schema.defaultValue)
             }
             return .object(Dictionary(uniqueKeysWithValues: entries))
         }
@@ -140,7 +158,7 @@ extension FeatureSchema: Codable {
             self = .regex(default: try c.decode(String.self, forKey: .default))
         case .combo:
             self = .combo(
-                choices: try c.decode([String].self, forKey: .choices),
+                choices: try c.decode([ComboChoice].self, forKey: .choices),
                 default: try c.decodeIfPresent(String.self, forKey: .default)
             )
         case .object:
@@ -222,7 +240,7 @@ extension ArrayItemSchema: Codable {
         case .double: self = .double
         case .string: self = .string
         case .regex: self = .regex
-        case .combo: self = .combo(choices: try c.decode([String].self, forKey: .choices))
+        case .combo: self = .combo(choices: try c.decode([ComboChoice].self, forKey: .choices))
         case .object: self = .object(fields: try c.decode([ObjectField].self, forKey: .fields))
         }
     }

@@ -46,12 +46,12 @@ public enum FeatureValue: Sendable, Equatable {
         valueFields: [String: FeatureValue],
         schemaFields: [ObjectField]
     ) -> Bool {
-        let knownNames = Set(schemaFields.map(\.name))
-        for name in valueFields.keys where !knownNames.contains(name) {
+        let knownIDs = Set(schemaFields.map(\.id))
+        for id in valueFields.keys where !knownIDs.contains(id) {
             return false
         }
         for field in schemaFields {
-            if let v = valueFields[field.name] {
+            if let v = valueFields[field.id] {
                 if !v.matches(schema: field.schema) { return false }
             } else if !field.optional {
                 return false

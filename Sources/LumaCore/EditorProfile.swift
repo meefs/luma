@@ -273,6 +273,7 @@ public enum CustomInstrumentTypings {
         var lines: [String] = ["declare interface CustomInstrumentFeatureMap {"]
         for feature in def.features {
             let optionalMark = feature.optional ? "?" : ""
+            lines.append("    /** \(jsDocText(feature.name)) */")
             lines.append("    \(featureKey(feature.id))\(optionalMark): \(typeScriptType(for: feature.schema, optional: feature.optional));")
         }
         lines.append("}")
@@ -320,14 +321,14 @@ public enum CustomInstrumentTypings {
         guard !fields.isEmpty else { return "{}" }
         let entries = fields.map { field in
             let optionalMark = field.optional ? "?" : ""
-            return "\(featureKey(field.name))\(optionalMark): \(typeScriptType(for: field.schema, optional: field.optional))"
+            return "/** \(jsDocText(field.name)) */ \(featureKey(field.id))\(optionalMark): \(typeScriptType(for: field.schema, optional: field.optional))"
         }
         return "{ \(entries.joined(separator: "; ")) }"
     }
 
-    private static func comboType(choices: [String]) -> String {
+    private static func comboType(choices: [ComboChoice]) -> String {
         guard !choices.isEmpty else { return "string" }
-        return choices.map(jsStringLiteral).joined(separator: " | ")
+        return choices.map { jsStringLiteral($0.id) }.joined(separator: " | ")
     }
 
     private static func jsStringLiteral(_ s: String) -> String {
@@ -335,6 +336,10 @@ public enum CustomInstrumentTypings {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+
+    private static func jsDocText(_ s: String) -> String {
+        s.replacingOccurrences(of: "*/", with: "*\\/")
     }
 }
 
