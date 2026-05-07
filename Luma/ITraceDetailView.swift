@@ -49,6 +49,15 @@ struct ITraceDetailView: View {
             if isLoading {
                 ProgressView("Decoding trace…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if decoded == nil, liveTrace.dataSize == 0, liveTrace.isRunning {
+                VStack(spacing: 8) {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.red)
+                    Text("Waiting for trace data…")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let errorText {
                 Text(errorText)
                     .font(.system(.body, design: .monospaced))
@@ -386,6 +395,11 @@ struct ITraceDetailView: View {
 
     private func decodeTrace() {
         let snapshot = liveTrace
+        if snapshot.dataSize == 0 {
+            isLoading = false
+            errorText = nil
+            return
+        }
         let isFirstDecode = (decoded == nil)
         isLoading = isFirstDecode
         errorText = nil
