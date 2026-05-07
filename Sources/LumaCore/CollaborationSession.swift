@@ -78,10 +78,11 @@ public final class CollaborationSession {
         public let createdAt: String
         public var lastSeenAt: String
         public var modules: [ProcessModule]
+        public var threads: [ProcessThread]
         public var replCells: [REPLCell]
         public var instruments: [InstrumentInstance]
         public var insights: [AddressInsight]
-        public var captures: [ITraceCaptureRecord]
+        public var traces: [ITrace]
 
         public init(
             id: UUID,
@@ -95,10 +96,11 @@ public final class CollaborationSession {
             createdAt: String,
             lastSeenAt: String,
             modules: [ProcessModule],
+            threads: [ProcessThread] = [],
             replCells: [REPLCell] = [],
             instruments: [InstrumentInstance] = [],
             insights: [AddressInsight] = [],
-            captures: [ITraceCaptureRecord] = []
+            traces: [ITrace] = []
         ) {
             self.id = id
             self.host = host
@@ -111,10 +113,11 @@ public final class CollaborationSession {
             self.createdAt = createdAt
             self.lastSeenAt = lastSeenAt
             self.modules = modules
+            self.threads = threads
             self.replCells = replCells
             self.instruments = instruments
             self.insights = insights
-            self.captures = captures
+            self.traces = traces
         }
 
         public static func fromJSON(_ obj: [String: Any]) -> Session? {
@@ -150,6 +153,9 @@ public final class CollaborationSession {
             let moduleObjs = (obj["modules"] as? [[String: Any]]) ?? []
             let modules = moduleObjs.compactMap(ProcessModule.fromJSON)
 
+            let threadObjs = (obj["threads"] as? [[String: Any]]) ?? []
+            let threads = threadObjs.compactMap(ProcessThread.fromJSON)
+
             let cellObjs = (obj["repl_cells"] as? [[String: Any]]) ?? []
             let cells = cellObjs.compactMap(REPLCell.fromWireJSON)
 
@@ -159,8 +165,8 @@ public final class CollaborationSession {
             let insightObjs = (obj["insights"] as? [[String: Any]]) ?? []
             let insights = insightObjs.compactMap(AddressInsight.fromWireJSON)
 
-            let captureObjs = (obj["captures"] as? [[String: Any]]) ?? []
-            let captures = captureObjs.compactMap(ITraceCaptureRecord.fromWireJSON)
+            let traceObjs = (obj["traces"] as? [[String: Any]]) ?? []
+            let traces = traceObjs.compactMap(ITrace.fromWireJSON)
 
             return Session(
                 id: id,
@@ -174,10 +180,11 @@ public final class CollaborationSession {
                 createdAt: createdAt,
                 lastSeenAt: lastSeenAt,
                 modules: modules,
+                threads: threads,
                 replCells: cells,
                 instruments: instruments,
                 insights: insights,
-                captures: captures
+                traces: traces
             )
         }
     }
@@ -253,7 +260,8 @@ public final class CollaborationSession {
     public var onSessionsSnapshot: (([Session]) -> Void)?
     public var onSessionAdded: ((Session) -> Void)?
     public var onSessionPhaseChanged: ((UUID, Session.Phase, String?) -> Void)?
-    public var onSessionModulesUpdated: ((UUID, [ProcessModule]) -> Void)?
+    public var onSessionModulesUpdated: ((UUID, ModuleDelta) -> Void)?
+    public var onSessionThreadsUpdated: ((UUID, ThreadDelta) -> Void)?
     public var onSessionHostChanged: ((UUID, UserInfo, String, String, UInt, String) -> Void)?
     public var onSessionDriverChanged: ((UUID, UserInfo) -> Void)?
     public var onSessionReplCellAdded: ((UUID, REPLCell) -> Void)?
@@ -267,8 +275,9 @@ public final class CollaborationSession {
     public var onSessionInstrumentUpdateConfigRequested: ((UUID, UUID, Data) -> Void)?
     public var onSessionInsightAdded: ((UUID, AddressInsight) -> Void)?
     public var onSessionInsightRemoved: ((UUID, UUID) -> Void)?
-    public var onSessionCaptureAdded: ((UUID, ITraceCaptureRecord) -> Void)?
-    public var onSessionCaptureRemoved: ((UUID, UUID) -> Void)?
+    public var onSessionTraceUpserted: ((UUID, ITrace) -> Void)?
+    public var onSessionTraceRemoved: ((UUID, UUID) -> Void)?
+    public var onSessionTraceDataProgressed: ((UUID, UUID, Int) -> Void)?
     public var onSessionEventReceived: ((UUID, RuntimeEvent) -> Void)?
     public var onReplEvalTimedOut: ((UUID) -> Void)?
     public var onSessionRemoved: ((UUID) -> Void)?
@@ -703,10 +712,19 @@ public final class CollaborationSession {
         )))
     }
 
-    public func enqueueUpdateSessionModules(sessionID: UUID, modules: [ProcessModule]) {
+    public func enqueueUpdateSessionModules(sessionID: UUID, delta: ModuleDelta) {
+        guard !delta.isEmpty else { return }
         enqueueSessionOp(.updateModules(.init(
             sessionID: sessionID,
-            modules: modules
+            delta: delta
+        )))
+    }
+
+    public func enqueueUpdateSessionThreads(sessionID: UUID, delta: ThreadDelta) {
+        guard !delta.isEmpty else { return }
+        enqueueSessionOp(.updateThreads(.init(
+            sessionID: sessionID,
+            delta: delta
         )))
     }
 
@@ -769,14 +787,59 @@ public final class CollaborationSession {
         enqueueSessionOp(.removeInsight(.init(sessionID: sessionID, insightID: insightID)))
     }
 
-    public func enqueueAddCapture(sessionID: UUID, capture: ITraceCaptureRecord) {
-        var wireCapture = capture
-        wireCapture.sessionID = sessionID
-        enqueueSessionOp(.addCapture(.init(sessionID: sessionID, capture: wireCapture)))
+    public func uploadTraceData(sessionID: UUID, traceID: UUID, offset: Int, chunk: Data) {
+        guard case .joined(let labID) = status else { return }
+        sendNotification(
+            to: "/labs/\(labID)/sessions/\(sessionID.uuidString)",
+            type: "+op",
+            payload: [
+                "op_id": UUID().uuidString,
+                "kind": "set-trace-data",
+                "trace_id": traceID.uuidString,
+                "offset": offset,
+            ],
+            data: [UInt8](chunk)
+        )
     }
 
-    public func enqueueRemoveCapture(sessionID: UUID, captureID: UUID) {
-        enqueueSessionOp(.removeCapture(.init(sessionID: sessionID, captureID: captureID)))
+    public func fetchTraceData(
+        sessionID: UUID,
+        traceID: UUID,
+        offset: Int = 0,
+        length: Int? = nil
+    ) async throws -> (data: Data, totalSize: Int) {
+        guard case .joined(let labID) = status else {
+            throw LumaCoreError.invalidOperation("Not joined to a lab")
+        }
+        var payload: JSONObject = ["offset": offset]
+        if let length { payload["length"] = length }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            sendRequest(
+                to: "/labs/\(labID)/sessions/\(sessionID.uuidString)/traces/\(traceID.uuidString)",
+                type: "+fetch",
+                payload: payload
+            ) { [weak self] result in
+                switch result {
+                case .success(let payload):
+                    let total = (payload["total_size"] as? Int) ?? 0
+                    let bytes = self?.lastMessageData ?? []
+                    continuation.resume(returning: (Data(bytes), total))
+                case .failure(let failure):
+                    continuation.resume(throwing: failure)
+                }
+            }
+        }
+    }
+
+    public func enqueueUpsertTrace(sessionID: UUID, trace: ITrace) {
+        var wireTrace = trace
+        wireTrace.sessionID = sessionID
+        enqueueSessionOp(.upsertTrace(.init(sessionID: sessionID, trace: wireTrace)))
+    }
+
+    public func enqueueRemoveTrace(sessionID: UUID, traceID: UUID) {
+        enqueueSessionOp(.removeTrace(.init(sessionID: sessionID, traceID: traceID)))
     }
 
     public func sendEvent(sessionID: UUID, event: RuntimeEvent) {
@@ -911,7 +974,10 @@ public final class CollaborationSession {
             onSessionPhaseChanged?(u.sessionID, u.phase, u.reason)
 
         case .updateModules(let u):
-            onSessionModulesUpdated?(u.sessionID, u.modules)
+            onSessionModulesUpdated?(u.sessionID, u.delta)
+
+        case .updateThreads(let u):
+            onSessionThreadsUpdated?(u.sessionID, u.delta)
 
         case .claimHost(let c):
             onSessionHostChanged?(
@@ -940,11 +1006,14 @@ public final class CollaborationSession {
         case .removeInsight(let r):
             onSessionInsightRemoved?(r.sessionID, r.insightID)
 
-        case .addCapture(let a):
-            onSessionCaptureAdded?(a.sessionID, a.capture)
+        case .upsertTrace(let u):
+            onSessionTraceUpserted?(u.sessionID, u.trace)
 
-        case .removeCapture(let r):
-            onSessionCaptureRemoved?(r.sessionID, r.captureID)
+        case .removeTrace(let r):
+            onSessionTraceRemoved?(r.sessionID, r.traceID)
+
+        case .traceDataProgressed(let t):
+            onSessionTraceDataProgressed?(t.sessionID, t.traceID, t.totalSize)
 
         case .remove(let r):
             onSessionRemoved?(r.sessionID)

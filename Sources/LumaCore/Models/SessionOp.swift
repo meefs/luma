@@ -9,6 +9,7 @@ public enum SessionOp: Sendable {
     case add(Add)
     case updatePhase(UpdatePhase)
     case updateModules(UpdateModules)
+    case updateThreads(UpdateThreads)
     case claimHost(ClaimHost)
     case claimDriver(ClaimDriver)
     case addReplCell(AddReplCell)
@@ -17,8 +18,9 @@ public enum SessionOp: Sendable {
     case removeInstrument(RemoveInstrument)
     case addInsight(AddInsight)
     case removeInsight(RemoveInsight)
-    case addCapture(AddCapture)
-    case removeCapture(RemoveCapture)
+    case upsertTrace(UpsertTrace)
+    case removeTrace(RemoveTrace)
+    case traceDataProgressed(TraceDataProgressed)
     case remove(Remove)
 
     public var opID: UUID {
@@ -26,6 +28,7 @@ public enum SessionOp: Sendable {
         case .add(let a): return a.opID
         case .updatePhase(let u): return u.opID
         case .updateModules(let u): return u.opID
+        case .updateThreads(let u): return u.opID
         case .claimHost(let c): return c.opID
         case .claimDriver(let c): return c.opID
         case .addReplCell(let a): return a.opID
@@ -34,8 +37,9 @@ public enum SessionOp: Sendable {
         case .removeInstrument(let r): return r.opID
         case .addInsight(let a): return a.opID
         case .removeInsight(let r): return r.opID
-        case .addCapture(let a): return a.opID
-        case .removeCapture(let r): return r.opID
+        case .upsertTrace(let u): return u.opID
+        case .removeTrace(let r): return r.opID
+        case .traceDataProgressed(let t): return t.opID
         case .remove(let r): return r.opID
         }
     }
@@ -45,6 +49,7 @@ public enum SessionOp: Sendable {
         case .add(let a): return a.sessionID
         case .updatePhase(let u): return u.sessionID
         case .updateModules(let u): return u.sessionID
+        case .updateThreads(let u): return u.sessionID
         case .claimHost(let c): return c.sessionID
         case .claimDriver(let c): return c.sessionID
         case .addReplCell(let a): return a.sessionID
@@ -53,8 +58,9 @@ public enum SessionOp: Sendable {
         case .removeInstrument(let r): return r.sessionID
         case .addInsight(let a): return a.sessionID
         case .removeInsight(let r): return r.sessionID
-        case .addCapture(let a): return a.sessionID
-        case .removeCapture(let r): return r.sessionID
+        case .upsertTrace(let u): return u.sessionID
+        case .removeTrace(let r): return r.sessionID
+        case .traceDataProgressed(let t): return t.sessionID
         case .remove(let r): return r.sessionID
         }
     }
@@ -64,6 +70,7 @@ public enum SessionOp: Sendable {
         case .add: return "add"
         case .updatePhase: return "update-phase"
         case .updateModules: return "update-modules"
+        case .updateThreads: return "update-threads"
         case .claimHost: return "claim-host"
         case .claimDriver: return "claim-driver"
         case .addReplCell: return "add-repl-cell"
@@ -72,8 +79,9 @@ public enum SessionOp: Sendable {
         case .removeInstrument: return "remove-instrument"
         case .addInsight: return "add-insight"
         case .removeInsight: return "remove-insight"
-        case .addCapture: return "add-capture"
-        case .removeCapture: return "remove-capture"
+        case .upsertTrace: return "upsert-trace"
+        case .removeTrace: return "remove-trace"
+        case .traceDataProgressed: return "trace-data-progressed"
         case .remove: return "remove"
         }
     }
@@ -134,16 +142,32 @@ public enum SessionOp: Sendable {
     public struct UpdateModules: Sendable {
         public let opID: UUID
         public let sessionID: UUID
-        public let modules: [ProcessModule]
+        public let delta: ModuleDelta
 
         public init(
             opID: UUID = UUID(),
             sessionID: UUID,
-            modules: [ProcessModule]
+            delta: ModuleDelta
         ) {
             self.opID = opID
             self.sessionID = sessionID
-            self.modules = modules
+            self.delta = delta
+        }
+    }
+
+    public struct UpdateThreads: Sendable {
+        public let opID: UUID
+        public let sessionID: UUID
+        public let delta: ThreadDelta
+
+        public init(
+            opID: UUID = UUID(),
+            sessionID: UUID,
+            delta: ThreadDelta
+        ) {
+            self.opID = opID
+            self.sessionID = sessionID
+            self.delta = delta
         }
     }
 
@@ -263,27 +287,41 @@ public enum SessionOp: Sendable {
         }
     }
 
-    public struct AddCapture: Sendable {
+    public struct UpsertTrace: Sendable {
         public let opID: UUID
         public let sessionID: UUID
-        public let capture: ITraceCaptureRecord
+        public let trace: ITrace
 
-        public init(opID: UUID = UUID(), sessionID: UUID, capture: ITraceCaptureRecord) {
+        public init(opID: UUID = UUID(), sessionID: UUID, trace: ITrace) {
             self.opID = opID
             self.sessionID = sessionID
-            self.capture = capture
+            self.trace = trace
         }
     }
 
-    public struct RemoveCapture: Sendable {
+    public struct TraceDataProgressed: Sendable {
         public let opID: UUID
         public let sessionID: UUID
-        public let captureID: UUID
+        public let traceID: UUID
+        public let totalSize: Int
 
-        public init(opID: UUID = UUID(), sessionID: UUID, captureID: UUID) {
+        public init(opID: UUID = UUID(), sessionID: UUID, traceID: UUID, totalSize: Int) {
             self.opID = opID
             self.sessionID = sessionID
-            self.captureID = captureID
+            self.traceID = traceID
+            self.totalSize = totalSize
+        }
+    }
+
+    public struct RemoveTrace: Sendable {
+        public let opID: UUID
+        public let sessionID: UUID
+        public let traceID: UUID
+
+        public init(opID: UUID = UUID(), sessionID: UUID, traceID: UUID) {
+            self.opID = opID
+            self.sessionID = sessionID
+            self.traceID = traceID
         }
     }
 
@@ -317,7 +355,16 @@ public enum SessionOp: Sendable {
             obj["last_seen_at"] = u.lastSeenAt
             if let reason = u.reason { obj["reason"] = reason }
         case .updateModules(let u):
-            obj["modules"] = u.modules.map { $0.toJSON() }
+            obj["added"] = u.delta.added.map { $0.toJSON() }
+            obj["removed"] = u.delta.removed.map { $0.toJSON() }
+        case .updateThreads(let u):
+            obj["added"] = u.delta.added.map { $0.toJSON() }
+            obj["removed"] = u.delta.removed.map { Int($0) }
+            obj["renamed"] = u.delta.renamed.map { rename -> [String: Any] in
+                var entry: [String: Any] = ["id": Int(rename.id)]
+                if let name = rename.name { entry["name"] = name }
+                return entry
+            }
         case .claimHost(let c):
             obj["host"] = [
                 "id": c.host.id,
@@ -352,12 +399,15 @@ public enum SessionOp: Sendable {
             }
         case .removeInsight(let r):
             obj["insight_id"] = r.insightID.uuidString
-        case .addCapture(let a):
-            if let captureObj = a.capture.toWireJSON() {
-                obj["capture"] = captureObj
+        case .upsertTrace(let u):
+            if let traceObj = u.trace.toWireJSON() {
+                obj["trace"] = traceObj
             }
-        case .removeCapture(let r):
-            obj["capture_id"] = r.captureID.uuidString
+        case .removeTrace(let r):
+            obj["trace_id"] = r.traceID.uuidString
+        case .traceDataProgressed(let t):
+            obj["trace_id"] = t.traceID.uuidString
+            obj["total_size"] = t.totalSize
         case .remove:
             break
         }
@@ -413,12 +463,33 @@ public enum SessionOp: Sendable {
             ))
 
         case "update-modules":
-            guard let moduleObjs = obj["modules"] as? [[String: Any]] else { return nil }
-            let modules = moduleObjs.compactMap(ProcessModule.fromJSON)
+            let addedObjs = (obj["added"] as? [[String: Any]]) ?? []
+            let removedObjs = (obj["removed"] as? [[String: Any]]) ?? []
+            let added = addedObjs.compactMap(ProcessModule.fromJSON)
+            let removed = removedObjs.compactMap(ProcessModule.fromJSON)
             return .updateModules(UpdateModules(
                 opID: opID,
                 sessionID: sessionID,
-                modules: modules
+                delta: ModuleDelta(added: added, removed: removed)
+            ))
+
+        case "update-threads":
+            let addedObjs = (obj["added"] as? [[String: Any]]) ?? []
+            let removedIDs = (obj["removed"] as? [Int]) ?? []
+            let renamedObjs = (obj["renamed"] as? [[String: Any]]) ?? []
+            let added = addedObjs.compactMap(ProcessThread.fromJSON)
+            let renamed = renamedObjs.compactMap { entry -> ThreadDelta.Rename? in
+                guard let raw = entry["id"] as? Int else { return nil }
+                return ThreadDelta.Rename(id: UInt(raw), name: entry["name"] as? String)
+            }
+            return .updateThreads(UpdateThreads(
+                opID: opID,
+                sessionID: sessionID,
+                delta: ThreadDelta(
+                    added: added,
+                    removed: removedIDs.map { UInt($0) },
+                    renamed: renamed
+                )
             ))
 
         case "claim-host":
@@ -515,24 +586,36 @@ public enum SessionOp: Sendable {
                 insightID: insightID
             ))
 
-        case "add-capture":
-            guard let captureObj = obj["capture"] as? [String: Any],
-                let capture = ITraceCaptureRecord.fromWireJSON(captureObj)
+        case "upsert-trace":
+            guard let traceObj = obj["trace"] as? [String: Any],
+                let trace = ITrace.fromWireJSON(traceObj)
             else { return nil }
-            return .addCapture(AddCapture(
+            return .upsertTrace(UpsertTrace(
                 opID: opID,
                 sessionID: sessionID,
-                capture: capture
+                trace: trace
             ))
 
-        case "remove-capture":
-            guard let captureIDStr = obj["capture_id"] as? String,
-                let captureID = UUID(uuidString: captureIDStr)
+        case "remove-trace":
+            guard let traceIDStr = obj["trace_id"] as? String,
+                let traceID = UUID(uuidString: traceIDStr)
             else { return nil }
-            return .removeCapture(RemoveCapture(
+            return .removeTrace(RemoveTrace(
                 opID: opID,
                 sessionID: sessionID,
-                captureID: captureID
+                traceID: traceID
+            ))
+
+        case "trace-data-progressed":
+            guard let traceIDStr = obj["trace_id"] as? String,
+                let traceID = UUID(uuidString: traceIDStr),
+                let totalSize = obj["total_size"] as? Int
+            else { return nil }
+            return .traceDataProgressed(TraceDataProgressed(
+                opID: opID,
+                sessionID: sessionID,
+                traceID: traceID,
+                totalSize: totalSize
             ))
 
         case "remove":

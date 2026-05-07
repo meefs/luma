@@ -117,13 +117,13 @@ public final class ProjectStore: Sendable {
         )
     }
 
-    public func observeAllITraceCaptures(
-        onChange: @escaping @Sendable ([UUID: [ITraceCaptureRecord]]) -> Void
+    public func observeAllITraces(
+        onChange: @escaping @Sendable ([UUID: [ITrace]]) -> Void
     ) -> StoreObservation {
         StoreObservation(
             ValueObservation
                 .tracking { db in
-                    try ITraceCaptureRecord.fetchAll(db)
+                    try ITrace.fetchAll(db)
                 }
                 .start(in: db, scheduling: .async(onQueue: .main), onError: { _ in }) { rows in
                     onChange(Dictionary(grouping: rows, by: \.sessionID))
@@ -374,26 +374,41 @@ public final class ProjectStore: Sendable {
         try record.save(db)
     }
 
-    // MARK: - ITrace Captures
+    // MARK: - Session UI State
 
-    public func fetchITraceCaptures(sessionID: UUID) throws -> [ITraceCaptureRecord] {
+    public func fetchAllSessionUIStates() throws -> [UUID: SessionUIState] {
         try db.read { db in
-            try ITraceCaptureRecord
+            let rows = try SessionUIState.fetchAll(db)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.sessionID, $0) })
+        }
+    }
+
+    public func save(_ state: SessionUIState) throws {
+        try db.write { db in
+            try state.save(db)
+        }
+    }
+
+    // MARK: - ITraces
+
+    public func fetchITraces(sessionID: UUID) throws -> [ITrace] {
+        try db.read { db in
+            try ITrace
                 .filter(Column("session_id") == sessionID)
-                .order(Column("captured_at").asc)
+                .order(Column("started_at").asc)
                 .fetchAll(db)
         }
     }
 
-    public func save(_ capture: ITraceCaptureRecord) throws {
+    public func save(_ trace: ITrace) throws {
         try db.write { db in
-            try capture.save(db)
+            try trace.save(db)
         }
     }
 
-    public func deleteCapture(id: UUID) throws {
+    public func deleteITrace(id: UUID) throws {
         try db.write { db in
-            _ = try ITraceCaptureRecord.deleteOne(db, key: id)
+            _ = try ITrace.deleteOne(db, key: id.uuidString)
         }
     }
 
@@ -578,6 +593,20 @@ public final class ProjectStore: Sendable {
         try record.save(db)
     }
 
+    // MARK: - Project UI State
+
+    public func fetchProjectUIState() throws -> ProjectUIState {
+        try db.read { db in
+            try ProjectUIState.fetchOne(db) ?? ProjectUIState()
+        }
+    }
+
+    public func save(_ state: ProjectUIState) throws {
+        try db.write { db in
+            try state.save(db)
+        }
+    }
+
     // MARK: - Target Picker State
 
     public func fetchTargetPickerState() throws -> TargetPickerState {
@@ -611,6 +640,7 @@ public final class ProjectStore: Sendable {
             t.column("last_attached_at", .datetime)
             t.column("process_info", .blob)
             t.column("last_known_modules", .blob)
+            t.column("last_known_threads", .blob)
         }
 
         try db.create(table: "instrument_instance", ifNotExists: true) { t in
@@ -664,17 +694,25 @@ public final class ProjectStore: Sendable {
             t.column("created_at", .datetime).notNull()
         }
 
-        try db.create(table: "itrace_capture", ifNotExists: true) { t in
+        try db.create(table: "itrace", ifNotExists: true) { t in
             t.primaryKey("id", .text).notNull()
             t.column("session_id", .text).notNull()
                 .references("process_session", onDelete: .cascade)
-            t.column("hook_id", .text).notNull()
-            t.column("call_index", .integer).notNull()
-            t.column("captured_at", .datetime).notNull()
+            t.column("origin", .blob).notNull()
             t.column("display_name", .text).notNull()
-            t.column("trace_data", .blob).notNull()
+            t.column("started_at", .datetime).notNull()
+            t.column("stopped_at", .datetime)
             t.column("metadata_json", .blob).notNull()
+            t.column("data_size", .integer).notNull().defaults(to: 0)
             t.column("lost", .integer).notNull().defaults(to: 0)
+        }
+
+        try db.create(table: "session_ui_state", ifNotExists: true) { t in
+            t.primaryKey("session_id", .text).notNull()
+                .references("process_session", onDelete: .cascade)
+            t.column("detail_section", .text)
+            t.column("last_selected_module_id", .text)
+            t.column("last_selected_thread_id", .integer)
         }
 
         try db.create(table: "address_insight", ifNotExists: true) { t in
@@ -735,6 +773,14 @@ public final class ProjectStore: Sendable {
             t.column("def_id", .text).notNull()
             t.column("payload_json", .text).notNull()
             t.column("created_at", .datetime).notNull()
+        }
+
+        try db.create(table: "project_ui_state", ifNotExists: true) { t in
+            t.primaryKey("id", .text).notNull()
+            t.column("selected_item_json", .text)
+            t.column("event_stream_collapsed", .boolean).notNull().defaults(to: true)
+            t.column("event_stream_bottom_height", .double).notNull().defaults(to: 0)
+            t.column("collaboration_panel_visible", .boolean).notNull().defaults(to: false)
         }
 
         try db.create(table: "target_picker_state", ifNotExists: true) { t in

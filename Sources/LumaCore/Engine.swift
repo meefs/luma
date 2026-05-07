@@ -7,6 +7,7 @@ import Observation
 public final class Engine {
     public let deviceManager = DeviceManager()
     public let store: ProjectStore
+    public let traces: TraceStore
     public let compilerWorkspace: CompilerWorkspace
 
     public private(set) var processNodes: [ProcessNode] = []
@@ -37,13 +38,14 @@ public final class Engine {
     public private(set) var notebookEntries: [NotebookEntry] = []
     public private(set) var instrumentsBySession: [UUID: [InstrumentInstance]] = [:]
     public private(set) var insightsBySession: [UUID: [AddressInsight]] = [:]
-    public private(set) var capturesBySession: [UUID: [ITraceCaptureRecord]] = [:]
+    public private(set) var tracesBySession: [UUID: [ITrace]] = [:]
     public private(set) var installedPackages: [InstalledPackage] = []
     public private(set) var editorFSSnapshot: EditorFSSnapshot?
     @ObservationIgnored public var editorFSSnapshotDirty: Bool = true
     @ObservationIgnored private var editorFSSnapshotVersion: Int = 0
 
     private var addressActionProviders: [AddressActionProvider] = []
+    private var threadActionProviders: [ThreadActionProvider] = []
     @ObservationIgnored public var onSessionListChanged: (@MainActor (SessionListChange) -> Void)?
     @ObservationIgnored public var onREPLCellAdded: (@MainActor (REPLCell) -> Void)?
     @ObservationIgnored public var onNotebookChanged: (@MainActor (NotebookChange) -> Void)?
@@ -52,16 +54,27 @@ public final class Engine {
     @ObservationIgnored private var notebookObservation: StoreObservation?
     @ObservationIgnored private var instrumentsObservation: StoreObservation?
     @ObservationIgnored private var insightsObservation: StoreObservation?
-    @ObservationIgnored private var capturesObservation: StoreObservation?
+    @ObservationIgnored private var tracesObservation: StoreObservation?
+    @ObservationIgnored private var lastUploadedTraceSize: [UUID: Int] = [:]
+    @ObservationIgnored private let _traceCacheInvalidations = AsyncEventSource<TraceCacheInvalidation>()
+    public var traceCacheInvalidations: AsyncStream<TraceCacheInvalidation> { _traceCacheInvalidations.makeStream() }
+
+    public struct TraceCacheInvalidation: Sendable {
+        public let traceID: UUID
+        public let knownTotalSize: Int
+    }
+    private static let traceDataPageSize: Int = 1 * 1024 * 1024
     @ObservationIgnored private var packagesObservation: StoreObservation?
 
     public init(
         store: ProjectStore,
+        traces: TraceStore,
         dataDirectory: URL,
         tokenStore: TokenStore? = nil,
         gitHubAuth: GitHubAuth? = nil
     ) {
         self.store = store
+        self.traces = traces
         self.dataDirectory = dataDirectory
         self.compilerWorkspace = CompilerWorkspace(store: store)
         let hookPacksDir = dataDirectory.appendingPathComponent("HookPacks", isDirectory: true)
@@ -96,8 +109,12 @@ public final class Engine {
         }
         bindCollaborationCallbacks()
 
-        registerAddressActionProvider { [weak self] sessionID, address in
-            self?.tracerAddressActions(sessionID: sessionID, address: address) ?? []
+        registerAddressActionProvider { [weak self] sessionID, address, context in
+            self?.tracerAddressActions(sessionID: sessionID, address: address, context: context) ?? []
+        }
+
+        registerThreadActionProvider { [weak self] sessionID, thread in
+            self?.threadTraceActions(sessionID: sessionID, thread: thread) ?? []
         }
 
         Task { @MainActor [auth = self.gitHubAuth] in
@@ -112,6 +129,7 @@ public final class Engine {
             for await status in self.collaboration.statusChanges {
                 if case .joined = status {
                     self.syncAPNsSubscription()
+                    self.lastUploadedTraceSize.removeAll()
                 }
             }
         }
@@ -338,8 +356,12 @@ public final class Engine {
             self?.applyRemoteSessionPhase(sessionID: sessionID, phase: phase, reason: reason)
         }
 
-        collaboration.onSessionModulesUpdated = { [weak self] sessionID, modules in
-            self?.applyRemoteSessionModules(sessionID: sessionID, modules: modules)
+        collaboration.onSessionModulesUpdated = { [weak self] sessionID, delta in
+            self?.applyRemoteSessionModules(sessionID: sessionID, delta: delta)
+        }
+
+        collaboration.onSessionThreadsUpdated = { [weak self] sessionID, delta in
+            self?.applyRemoteSessionThreads(sessionID: sessionID, delta: delta)
         }
 
         collaboration.onSessionHostChanged = { [weak self] sessionID, host, deviceID, deviceName, pid, processName in
@@ -406,12 +428,16 @@ public final class Engine {
             self?.applyRemoteSessionInsightRemoved(sessionID: sessionID, insightID: insightID)
         }
 
-        collaboration.onSessionCaptureAdded = { [weak self] sessionID, capture in
-            self?.applyRemoteSessionCaptureAdded(sessionID: sessionID, capture: capture)
+        collaboration.onSessionTraceUpserted = { [weak self] sessionID, trace in
+            self?.applyRemoteSessionTraceUpserted(sessionID: sessionID, trace: trace)
         }
 
-        collaboration.onSessionCaptureRemoved = { [weak self] sessionID, captureID in
-            self?.applyRemoteSessionCaptureRemoved(sessionID: sessionID, captureID: captureID)
+        collaboration.onSessionTraceRemoved = { [weak self] sessionID, traceID in
+            self?.applyRemoteSessionTraceRemoved(sessionID: sessionID, traceID: traceID)
+        }
+
+        collaboration.onSessionTraceDataProgressed = { [weak self] sessionID, traceID, totalSize in
+            self?.applyRemoteTraceDataProgressed(sessionID: sessionID, traceID: traceID, totalSize: totalSize)
         }
 
         collaboration.onSessionEventReceived = { [weak self] sessionID, event in
@@ -444,16 +470,23 @@ public final class Engine {
         _events.yield(stamped)
     }
 
-    private func applyRemoteSessionCaptureAdded(sessionID: UUID, capture: ITraceCaptureRecord) {
-        var stored = capture
+    private func applyRemoteSessionTraceUpserted(sessionID: UUID, trace: ITrace) {
+        var stored = trace
         stored.sessionID = sessionID
         try? store.save(stored)
-        onSessionListChanged?(.captureAdded(stored))
+        onSessionListChanged?(.traceUpdated(stored))
     }
 
-    private func applyRemoteSessionCaptureRemoved(sessionID: UUID, captureID: UUID) {
-        try? store.deleteCapture(id: captureID)
-        onSessionListChanged?(.captureRemoved(id: captureID, sessionID: sessionID))
+    private func applyRemoteSessionTraceRemoved(sessionID: UUID, traceID: UUID) {
+        try? store.deleteITrace(id: traceID)
+        traces.delete(traceID: traceID)
+        onSessionListChanged?(.traceRemoved(id: traceID, sessionID: sessionID))
+    }
+
+    private func applyRemoteTraceDataProgressed(sessionID: UUID, traceID: UUID, totalSize: Int) {
+        let cachedSize = traces.size(traceID: traceID) ?? 0
+        guard cachedSize < totalSize else { return }
+        _traceCacheInvalidations.yield(TraceCacheInvalidation(traceID: traceID, knownTotalSize: totalSize))
     }
 
     private func applyRemoteSessionInsightAdded(sessionID: UUID, insight: AddressInsight) {
@@ -604,8 +637,11 @@ public final class Engine {
         for insight in (try? store.fetchInsights(sessionID: sessionID)) ?? [] {
             collaboration.enqueueAddInsight(sessionID: sessionID, insight: insight)
         }
-        for capture in (try? store.fetchITraceCaptures(sessionID: sessionID)) ?? [] {
-            collaboration.enqueueAddCapture(sessionID: sessionID, capture: capture)
+        for trace in (try? store.fetchITraces(sessionID: sessionID)) ?? [] {
+            collaboration.enqueueUpsertTrace(sessionID: sessionID, trace: trace)
+            Task { @MainActor [weak self] in
+                await self?.uploadTraceDelta(trace, collabSessionID: sessionID)
+            }
         }
     }
 
@@ -621,9 +657,10 @@ public final class Engine {
             record.deviceName = session.deviceName
             record.lastKnownPID = session.pid
             if !session.modules.isEmpty {
-                record.lastKnownModules = session.modules.map {
-                    ProcessSession.PersistedModule(name: $0.name, base: $0.base, size: $0.size)
-                }
+                record.lastKnownModules = session.modules
+            }
+            if !session.threads.isEmpty {
+                record.lastKnownThreads = session.threads
             }
             saveSession(record)
         } else {
@@ -637,9 +674,8 @@ public final class Engine {
                 lastKnownPID: session.pid
             )
             record.phase = session.phase.toProcessSessionPhase
-            record.lastKnownModules = session.modules.map {
-                ProcessSession.PersistedModule(name: $0.name, base: $0.base, size: $0.size)
-            }
+            record.lastKnownModules = session.modules
+            record.lastKnownThreads = session.threads
             try? store.save(record)
             sessions.insert(record, at: 0)
             onSessionListChanged?(.sessionAdded(record))
@@ -666,11 +702,11 @@ public final class Engine {
             onSessionListChanged?(.insightAdded(stored))
         }
 
-        for capture in session.captures {
-            var stored = capture
+        for trace in session.traces {
+            var stored = trace
             stored.sessionID = session.id
             try? store.save(stored)
-            onSessionListChanged?(.captureAdded(stored))
+            onSessionListChanged?(.traceUpdated(stored))
         }
     }
 
@@ -685,12 +721,17 @@ public final class Engine {
         saveSession(updated)
     }
 
-    private func applyRemoteSessionModules(sessionID: UUID, modules: [ProcessModule]) {
+    private func applyRemoteSessionModules(sessionID: UUID, delta: ModuleDelta) {
         guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         var updated = sessions[idx]
-        updated.lastKnownModules = modules.map {
-            ProcessSession.PersistedModule(name: $0.name, base: $0.base, size: $0.size)
-        }
+        updated.lastKnownModules = delta.applied(to: updated.lastKnownModules)
+        saveSession(updated)
+    }
+
+    private func applyRemoteSessionThreads(sessionID: UUID, delta: ThreadDelta) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        var updated = sessions[idx]
+        updated.lastKnownThreads = delta.applied(to: updated.lastKnownThreads)
         saveSession(updated)
     }
 
@@ -726,6 +767,7 @@ public final class Engine {
         updated.processName = processName
         updated.lastKnownPID = pid
         updated.lastKnownModules = nil
+        updated.lastKnownThreads = nil
         saveSession(updated)
     }
 
@@ -771,8 +813,8 @@ public final class Engine {
         insightsObservation = store.observeAllInsights { [weak self] grouped in
             Task { @MainActor in self?.insightsBySession = grouped }
         }
-        capturesObservation = store.observeAllITraceCaptures { [weak self] grouped in
-            Task { @MainActor in self?.capturesBySession = grouped }
+        tracesObservation = store.observeAllITraces { [weak self] grouped in
+            Task { @MainActor in self?.tracesBySession = grouped }
         }
         packagesObservation = store.observeInstalledPackages { [weak self] packages in
             Task { @MainActor in
@@ -1142,7 +1184,8 @@ public final class Engine {
                 session: fridaSession,
                 script: script,
                 instruments: instrumentRefs,
-                drainAgentSource: LumaAgent.drainSource
+                drainAgentSource: LumaAgent.drainSource,
+                traceStore: traces
             )
 
             let existingCells = (try? store.fetchREPLCells(sessionID: s.id)) ?? []
@@ -1321,14 +1364,152 @@ public final class Engine {
         }
     }
 
-    public func deleteCapture(id: UUID, sessionID: UUID) {
+    public func deleteITrace(id: UUID, sessionID: UUID) {
         if localUserHosts(sessionID) {
-            try? store.deleteCapture(id: id)
-            onSessionListChanged?(.captureRemoved(id: id, sessionID: sessionID))
+            try? store.deleteITrace(id: id)
+            traces.delete(traceID: id)
+            lastUploadedTraceSize.removeValue(forKey: id)
+            onSessionListChanged?(.traceRemoved(id: id, sessionID: sessionID))
         }
         if collaboration.isCollaborative {
-            collaboration.enqueueRemoveCapture(sessionID: sessionID, captureID: id)
+            collaboration.enqueueRemoveTrace(sessionID: sessionID, traceID: id)
         }
+    }
+
+    public func loadTraceDataPrefix(
+        traceID: UUID,
+        sessionID: UUID,
+        length: Int
+    ) async throws -> Data {
+        if let node = node(forSessionID: sessionID),
+            let live = node.livePendingTraceData(traceID: traceID)
+        {
+            return live.prefix(length)
+        }
+        if traces.exists(traceID: traceID) {
+            let cached = try traces.load(traceID: traceID)
+            if cached.count >= length {
+                return cached.prefix(length)
+            }
+        }
+        if let sid = collabSessionID(forSessionID: sessionID) {
+            let (data, _) = try await collaboration.fetchTraceData(
+                sessionID: sid,
+                traceID: traceID,
+                offset: 0,
+                length: length
+            )
+            return data
+        }
+        throw LumaCoreError.invalidOperation("Trace data unavailable")
+    }
+
+    public func loadTraceData(
+        traceID: UUID,
+        sessionID: UUID,
+        expectedSize: Int? = nil,
+        onProgress: (@MainActor (Int, Int) -> Void)? = nil
+    ) async throws -> Data {
+        if let node = node(forSessionID: sessionID),
+            let live = node.livePendingTraceData(traceID: traceID)
+        {
+            return live
+        }
+
+        let collabID = collabSessionID(forSessionID: sessionID)
+        var data: Data
+        var cursor: Int
+
+        if traces.exists(traceID: traceID) {
+            let cached = try traces.load(traceID: traceID)
+            if expectedSize == nil || cached.count == expectedSize {
+                return cached
+            }
+            if let want = expectedSize, want < cached.count {
+                data = Data()
+                cursor = 0
+            } else {
+                data = cached
+                cursor = cached.count
+            }
+        } else {
+            data = Data()
+            cursor = 0
+        }
+
+        guard let sid = collabID else {
+            return try traces.load(traceID: traceID)
+        }
+
+        while expectedSize.map({ cursor < $0 }) ?? true {
+            let remaining = expectedSize.map { $0 - cursor }
+            let length = remaining.map { min($0, Self.traceDataPageSize) } ?? Self.traceDataPageSize
+            let (chunk, totalSize) = try await collaboration.fetchTraceData(
+                sessionID: sid,
+                traceID: traceID,
+                offset: cursor,
+                length: length
+            )
+            if chunk.isEmpty { break }
+            data.append(chunk)
+            cursor += chunk.count
+            onProgress?(cursor, expectedSize ?? totalSize)
+            if expectedSize == nil, cursor >= totalSize { break }
+        }
+
+        try? traces.write(data, for: traceID)
+        return data
+    }
+
+    private func effectiveLastUploadedSize(traceID: UUID, collabSessionID: UUID) async -> Int {
+        if let cached = lastUploadedTraceSize[traceID] {
+            return cached
+        }
+        let serverSize: Int
+        do {
+            let (_, total) = try await collaboration.fetchTraceData(
+                sessionID: collabSessionID,
+                traceID: traceID,
+                offset: 0,
+                length: 0
+            )
+            serverSize = total
+        } catch {
+            serverSize = 0
+        }
+        lastUploadedTraceSize[traceID] = serverSize
+        return serverSize
+    }
+
+    private func uploadTraceDelta(_ trace: ITrace, collabSessionID: UUID) async {
+        let traceID = trace.id
+        let knownUploaded = await effectiveLastUploadedSize(traceID: traceID, collabSessionID: collabSessionID)
+        let startOffset = (trace.dataSize < knownUploaded) ? 0 : knownUploaded
+        guard trace.dataSize > startOffset else { return }
+
+        let data: Data
+        do {
+            data = try await loadTraceData(traceID: traceID, sessionID: trace.sessionID)
+        } catch {
+            return
+        }
+
+        let endIndex = min(data.count, trace.dataSize)
+        guard endIndex > startOffset else { return }
+
+        var cursor = startOffset
+        while cursor < endIndex {
+            let chunkEnd = min(cursor + Self.traceDataPageSize, endIndex)
+            let chunk = data.subdata(in: cursor..<chunkEnd)
+            collaboration.uploadTraceData(
+                sessionID: collabSessionID,
+                traceID: traceID,
+                offset: cursor,
+                chunk: chunk
+            )
+            cursor = chunkEnd
+        }
+        lastUploadedTraceSize[traceID] = endIndex
     }
 
     private func saveSession(_ session: ProcessSession) {
@@ -1348,8 +1529,8 @@ public final class Engine {
             for insight in ((try? store.fetchInsights(sessionID: session.id)) ?? []).sorted(by: { $0.createdAt < $1.createdAt }) {
                 onSessionListChanged?(.insightAdded(insight))
             }
-            for capture in ((try? store.fetchITraceCaptures(sessionID: session.id)) ?? []).sorted(by: { $0.capturedAt < $1.capturedAt }) {
-                onSessionListChanged?(.captureAdded(capture))
+            for trace in ((try? store.fetchITraces(sessionID: session.id)) ?? []).sorted(by: { $0.startedAt < $1.startedAt }) {
+                onSessionListChanged?(.traceUpdated(trace))
             }
         }
     }
@@ -1431,6 +1612,7 @@ public final class Engine {
         session.processName = process.name
         session.lastKnownPID = process.pid
         session.lastKnownModules = nil
+        session.lastKnownThreads = nil
         session.phase = .attaching
         saveSession(session)
 
@@ -1744,11 +1926,12 @@ public final class Engine {
         }
     }
 
-    // MARK: - Tracer Instruction Hook
+    // MARK: - Tracer Hook
 
-    public func addTracerInstructionHook(
+    public func addTracerHook(
         sessionID: UUID,
-        address: UInt64
+        address: UInt64,
+        kind: TracerHookKind
     ) async -> (instrumentID: UUID, hookID: UUID)? {
         guard (try? store.fetchSession(id: sessionID)) != nil else { return nil }
 
@@ -1779,13 +1962,13 @@ public final class Engine {
             return (instrumentID: tracer.id, hookID: existingID)
         }
 
-        let stub = defaultTracerCode(kind: .instruction, anchor: anchor, displayName: anchor.displayString)
+        let stub = defaultTracerCode(kind: kind, anchor: anchor, displayName: anchor.displayString)
 
         let newHook = TracerConfig.Hook(
             id: UUID(),
             displayName: String(format: "0x%llx", address),
             addressAnchor: anchor,
-            kind: .instruction,
+            kind: kind,
             isEnabled: true,
             code: stub
         )
@@ -1804,11 +1987,27 @@ public final class Engine {
         addressActionProviders.append(provider)
     }
 
-    public func addressActions(sessionID: UUID, address: UInt64) -> [AddressAction] {
-        addressActionProviders.flatMap { $0(sessionID, address) }
+    public func registerThreadActionProvider(_ provider: @escaping ThreadActionProvider) {
+        threadActionProviders.append(provider)
     }
 
-    private func tracerAddressActions(sessionID: UUID, address: UInt64) -> [AddressAction] {
+    public func threadActions(sessionID: UUID, thread: ProcessThread) -> [ThreadAction] {
+        threadActionProviders.flatMap { $0(sessionID, thread) }
+    }
+
+    public func addressActions(
+        sessionID: UUID,
+        address: UInt64,
+        context: AddressContext = AddressContext()
+    ) -> [AddressAction] {
+        addressActionProviders.flatMap { $0(sessionID, address, context) }
+    }
+
+    private func tracerAddressActions(
+        sessionID: UUID,
+        address: UInt64,
+        context: AddressContext
+    ) -> [AddressAction] {
         if let tracerID = tracerInstanceIDBySession[sessionID],
             let hookID = addressAnnotations[sessionID]?[address]?.tracerHookID
         {
@@ -1823,13 +2022,19 @@ public final class Engine {
             ]
         }
 
+        if context.kind == .data {
+            return []
+        }
+
+        let hookKind: TracerHookKind = (context.kind == .function) ? .function : .instruction
+        let title = (hookKind == .function) ? "Add Function Hook\u{2026}" : "Add Instruction Hook\u{2026}"
         return [
             AddressAction(
-                title: "Add Instruction Hook\u{2026}",
+                title: title,
                 systemImage: "pin",
                 perform: { [weak self] in
                     guard let self,
-                        let result = await self.addTracerInstructionHook(sessionID: sessionID, address: address)
+                        let result = await self.addTracerHook(sessionID: sessionID, address: address, kind: hookKind)
                     else { return nil }
                     return .instrumentComponent(
                         sessionID: sessionID,
@@ -1839,6 +2044,68 @@ public final class Engine {
                 }
             )
         ]
+    }
+
+    private func threadTraceActions(sessionID: UUID, thread: ProcessThread) -> [ThreadAction] {
+        guard node(forSessionID: sessionID) != nil else { return [] }
+        let threadID = thread.id
+        let threadName = thread.name
+        return [
+            ThreadAction(
+                title: "Trace Thread\u{2026}",
+                systemImage: "waveform",
+                perform: { [weak self] in
+                    guard let self else { return nil }
+                    guard let trace = await self.startThreadTrace(
+                        sessionID: sessionID,
+                        threadID: threadID,
+                        threadName: threadName
+                    ) else { return nil }
+                    return .itrace(sessionID: sessionID, traceID: trace.id)
+                }
+            )
+        ]
+    }
+
+    @discardableResult
+    public func startThreadTrace(
+        sessionID: UUID,
+        threadID: UInt,
+        threadName: String?
+    ) async -> ITrace? {
+        guard let node = node(forSessionID: sessionID) else { return nil }
+
+        let trace = ITrace(
+            sessionID: sessionID,
+            origin: .thread(threadID: threadID, threadName: threadName),
+            displayName: threadName.map { "Thread trace: \($0)" } ?? "Thread trace: tid \(threadID)",
+            startedAt: Date()
+        )
+        try? store.save(trace)
+        onSessionListChanged?(.traceUpdated(trace))
+
+        do {
+            try await node.startThreadTraceOnAgent(
+                traceID: trace.id,
+                threadID: threadID,
+                threadName: threadName
+            )
+        } catch {
+            try? store.deleteITrace(id: trace.id)
+            onSessionListChanged?(.traceRemoved(id: trace.id, sessionID: sessionID))
+            return nil
+        }
+
+        if let sid = collabSessionID(forNode: node) {
+            collaboration.enqueueUpsertTrace(sessionID: sid, trace: trace)
+        }
+
+        return trace
+    }
+
+    public func stopThreadTrace(traceID: UUID, sessionID: UUID) async {
+        guard let node = node(forSessionID: sessionID) else { return }
+        try? await node.stopTraceOnAgent(traceID: traceID)
     }
 
     // MARK: - Address Annotations
@@ -1976,10 +2243,12 @@ public final class Engine {
         var compiled = try await compileTracerConfig(config, paths: paths)
 
         var counters: [String: Int] = [:]
-        let captures = (try? store.fetchITraceCaptures(sessionID: sessionID)) ?? []
-        for capture in captures {
-            let key = capture.hookID.uuidString
-            counters[key] = max(counters[key] ?? 0, capture.callIndex + 1)
+        let traces = (try? store.fetchITraces(sessionID: sessionID)) ?? []
+        for trace in traces {
+            if case .functionCall(let hookID, let callIndex) = trace.origin {
+                let key = hookID.uuidString
+                counters[key] = max(counters[key] ?? 0, callIndex + 1)
+            }
         }
         if !counters.isEmpty {
             compiled["callCounters"] = counters
@@ -2338,6 +2607,13 @@ public final class Engine {
         return session.id
     }
 
+    private func collabSessionID(forSessionID sessionID: UUID) -> UUID? {
+        guard collaboration.isCollaborative,
+              sessions.contains(where: { $0.id == sessionID })
+        else { return nil }
+        return sessionID
+    }
+
     private func subscribeToNodeStreams(_ node: ProcessNode) {
         let sessionID = node.sessionID
 
@@ -2401,27 +2677,39 @@ public final class Engine {
 
         Task { @MainActor [weak self, weak node] in
             guard let node else { return }
-            for await capture in node.captures {
-                let record = ITraceCaptureRecord(from: capture, sessionID: sessionID)
-                try? self?.store.save(record)
-                self?.onSessionListChanged?(.captureAdded(record))
+            for await trace in node.traceUpdates {
+                var stored = trace
+                stored.sessionID = sessionID
+                try? self?.store.save(stored)
+                self?.onSessionListChanged?(.traceUpdated(stored))
                 if let sid = self?.collabSessionID(forNode: node) {
-                    self?.collaboration.enqueueAddCapture(sessionID: sid, capture: record)
+                    self?.collaboration.enqueueUpsertTrace(sessionID: sid, trace: stored)
+                    await self?.uploadTraceDelta(stored, collabSessionID: sid)
                 }
             }
         }
 
         Task { @MainActor [weak self, weak node] in
             guard let node else { return }
-            for await modules in node.moduleSnapshots {
-                self?.updateSession(id: sessionID) {
-                    $0.lastKnownModules = modules.map {
-                        ProcessSession.PersistedModule(name: $0.name, base: $0.base, size: $0.size)
-                    }
+            for await delta in node.moduleDeltas {
+                self?.updateSession(id: sessionID) { session in
+                    session.lastKnownModules = delta.applied(to: session.lastKnownModules)
                 }
                 self?.rebuildAddressAnnotations(sessionID: sessionID)
                 if let sid = self?.collabSessionID(forNode: node) {
-                    self?.collaboration.enqueueUpdateSessionModules(sessionID: sid, modules: modules)
+                    self?.collaboration.enqueueUpdateSessionModules(sessionID: sid, delta: delta)
+                }
+            }
+        }
+
+        Task { @MainActor [weak self, weak node] in
+            guard let node else { return }
+            for await delta in node.threadDeltas {
+                self?.updateSession(id: sessionID) { session in
+                    session.lastKnownThreads = delta.applied(to: session.lastKnownThreads)
+                }
+                if let sid = self?.collabSessionID(forNode: node) {
+                    self?.collaboration.enqueueUpdateSessionThreads(sessionID: sid, delta: delta)
                 }
             }
         }
