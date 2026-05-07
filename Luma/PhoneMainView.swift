@@ -15,15 +15,23 @@ struct PhoneMainView: View {
     @State private var eventsBaseline: Int = 0
     @State private var collabChatBaseline: Int = 0
 
-    private let dbURL: URL
+    private let projectURL: URL
     private let documentActions: PhoneDocumentActions
 
-    init(dbURL: URL, documentActions: PhoneDocumentActions = .noop) {
-        self.dbURL = dbURL
+    init(projectURL: URL, documentActions: PhoneDocumentActions = .noop) {
+        self.projectURL = projectURL
         self.documentActions = documentActions
+
+        let fm = FileManager.default
+        let dbURL = projectURL.appendingPathComponent("db.sqlite")
+        let tracesURL = projectURL.appendingPathComponent("traces", isDirectory: true)
+        try? fm.createDirectory(at: projectURL, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: tracesURL, withIntermediateDirectories: true)
+
         let store = try! ProjectStore(path: dbURL.path)
+        let traces = try! TraceStore(directory: tracesURL)
         self._workspace = StateObject(
-            wrappedValue: Workspace(store: store, gitHubAuth: sharedGitHubAuth())
+            wrappedValue: Workspace(store: store, traces: traces, gitHubAuth: sharedGitHubAuth())
         )
     }
 
@@ -89,20 +97,20 @@ struct PhoneMainView: View {
                             .toolbar { drawerTriggers }
                         }
 
-                    case .capture(let sessionID, let captureID):
+                    case .trace(let sessionID, let traceID):
                         if let session = workspace.engine.sessions.first(where: { $0.id == sessionID }),
-                           let capture = workspace.engine.capturesBySession[sessionID]?
-                               .first(where: { $0.id == captureID })
+                           let trace = workspace.engine.tracesBySession[sessionID]?
+                               .first(where: { $0.id == traceID })
                         {
                             SessionContent(sessionID: sessionID, workspace: workspace) {
                                 ITraceDetailView(
-                                    capture: capture,
+                                    trace: trace,
                                     session: session,
                                     workspace: workspace,
                                     selection: $path.asSidebarSelection()
                                 )
                             }
-                            .navigationTitle(capture.displayName)
+                            .navigationTitle(trace.displayName)
                             .navigationBarTitleDisplayMode(.inline)
                             .toolbar { drawerTriggers }
                         }
@@ -116,7 +124,7 @@ struct PhoneMainView: View {
             collabChatBaseline = workspace.engine.collaboration.chatMessages.count
         }
         .onAppear {
-            LumaAppState.shared.lastDocumentPath = dbURL.path
+            LumaAppState.shared.lastDocumentPath = projectURL.path
         }
         .onDisappear {
             Task { @MainActor in
@@ -157,7 +165,7 @@ enum PhoneRoute: Hashable {
     case session(UUID)
     case instrument(UUID, UUID)
     case insight(UUID, UUID)
-    case capture(UUID, UUID)
+    case trace(UUID, UUID)
 }
 
 extension Binding where Value == [PhoneRoute] {
@@ -172,9 +180,9 @@ extension Binding where Value == [PhoneRoute] {
                 case .instrument(let sid, let iid),
                      .instrumentComponent(let sid, let iid, _, _):
                     self.wrappedValue.append(.instrument(sid, iid))
-                case .itraceCapture(let sid, let cid):
-                    self.wrappedValue.append(.capture(sid, cid))
-                case .repl, .notebook, .package, .customInstrumentDef:
+                case .itrace(let sid, let tid):
+                    self.wrappedValue.append(.trace(sid, tid))
+                case .session, .repl, .notebook, .package, .customInstrumentDef:
                     break
                 }
             }

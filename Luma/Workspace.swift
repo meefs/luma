@@ -10,22 +10,108 @@ final class Workspace: ObservableObject {
 
     var deviceManager: DeviceManager { engine.deviceManager }
     let store: ProjectStore
+    let traces: TraceStore
 
     @Published var targetPickerContext: TargetPickerContext?
 
-    @Published var isCollaborationPanelVisible: Bool = false
+    var isCollaborationPanelVisible: Bool {
+        get { projectUIState.isCollaborationPanelVisible }
+        set {
+            guard projectUIState.isCollaborationPanelVisible != newValue else { return }
+            projectUIState.isCollaborationPanelVisible = newValue
+            try? store.save(projectUIState)
+        }
+    }
+
+    @Published var sessionUIStates: [UUID: SessionUIState] = [:]
+
+    @Published var projectUIState: ProjectUIState = ProjectUIState()
+
+    var selectedSidebarItem: SidebarItemID? {
+        get {
+            guard let json = projectUIState.selectedItemJSON,
+                let data = json.data(using: .utf8)
+            else { return nil }
+            return try? JSONDecoder().decode(SidebarItemID.self, from: data)
+        }
+        set {
+            if let newValue,
+                let data = try? JSONEncoder().encode(newValue),
+                let json = String(data: data, encoding: .utf8)
+            {
+                projectUIState.selectedItemJSON = json
+            } else {
+                projectUIState.selectedItemJSON = nil
+            }
+            try? store.save(projectUIState)
+        }
+    }
+
+    func setEventStreamCollapsed(_ collapsed: Bool) {
+        guard projectUIState.isEventStreamCollapsed != collapsed else { return }
+        projectUIState.isEventStreamCollapsed = collapsed
+        try? store.save(projectUIState)
+    }
+
+    func setEventStreamBottomHeight(_ height: Double) {
+        guard projectUIState.eventStreamBottomHeight != height else { return }
+        projectUIState.eventStreamBottomHeight = height
+        try? store.save(projectUIState)
+    }
+
+    func sessionDetailSection(for sessionID: UUID) -> SessionDetailSection {
+        guard let raw = sessionUIStates[sessionID]?.detailSection,
+            let section = SessionDetailSection(rawValue: raw)
+        else { return .summary }
+        return section
+    }
+
+    func setSessionDetailSection(sessionID: UUID, section: SessionDetailSection) {
+        mutateSessionUIState(sessionID: sessionID) { $0.detailSection = section.rawValue }
+    }
+
+    func lastSelectedModuleID(for sessionID: UUID) -> String? {
+        sessionUIStates[sessionID]?.lastSelectedModuleID
+    }
+
+    func setLastSelectedModuleID(sessionID: UUID, moduleID: String?) {
+        mutateSessionUIState(sessionID: sessionID) { $0.lastSelectedModuleID = moduleID }
+    }
+
+    func lastSelectedThreadID(for sessionID: UUID) -> UInt? {
+        sessionUIStates[sessionID]?.lastSelectedThreadID
+    }
+
+    func setLastSelectedThreadID(sessionID: UUID, threadID: UInt?) {
+        mutateSessionUIState(sessionID: sessionID) { $0.lastSelectedThreadID = threadID }
+    }
+
+    private func mutateSessionUIState(sessionID: UUID, _ mutate: (inout SessionUIState) -> Void) {
+        var state = sessionUIStates[sessionID] ?? SessionUIState(sessionID: sessionID)
+        mutate(&state)
+        sessionUIStates[sessionID] = state
+        try? store.save(state)
+    }
+
+    private static func loadSessionUIStates(store: ProjectStore) -> [UUID: SessionUIState] {
+        (try? store.fetchAllSessionUIStates()) ?? [:]
+    }
 
     #if os(macOS)
         private let localNotifier = LocalNotifier()
     #endif
 
-    init(store: ProjectStore, gitHubAuth: GitHubAuth? = nil) {
+    init(store: ProjectStore, traces: TraceStore, gitHubAuth: GitHubAuth? = nil) {
         self.store = store
+        self.traces = traces
         self.engine = Engine(
             store: store,
+            traces: traces,
             dataDirectory: LumaAppPaths.shared.dataDirectory,
             gitHubAuth: gitHubAuth
         )
+        self.sessionUIStates = Self.loadSessionUIStates(store: store)
+        self.projectUIState = (try? store.fetchProjectUIState()) ?? ProjectUIState()
         engine.onSessionListChanged = { [weak self] _ in self?.objectWillChange.send() }
         registerInstrumentUIs()
     }
@@ -116,6 +202,8 @@ final class Workspace: ObservableObject {
         switch target {
         case .instrumentComponent(let sid, let iid, let cid):
             return .instrumentComponent(sid, iid, cid, UUID())
+        case .itrace(let sid, let tid):
+            return .itrace(sid, tid)
         }
     }
 

@@ -8,19 +8,86 @@ struct ITraceTimeline: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
+    @State private var pageStart: Int = 0
+
     private let stripHeight: CGFloat = 32
+    private static let paginationThreshold: Int = 200
+    private static let pageSize: Int = 100
 
     var body: some View {
+        if functionCalls.count > Self.paginationThreshold {
+            paginatedTimeline
+        } else {
+            timelineStrip(calls: functionCalls, baseIndex: 0, denom: totalEntryCount)
+        }
+    }
+
+    private var paginatedTimeline: some View {
+        let clampedStart = clampedPageStart()
+        let pageEnd = min(clampedStart + Self.pageSize, functionCalls.count)
+        let pageCalls = Array(functionCalls[clampedStart..<pageEnd])
+        let pageDenom = pageCalls.reduce(0) { $0 + $1.entryCount }
+        return VStack(spacing: 4) {
+            paginationControls(start: clampedStart, end: pageEnd)
+            timelineStrip(calls: pageCalls, baseIndex: clampedStart, denom: pageDenom)
+        }
+        .onChange(of: selectedCallIndex) { _, newValue in
+            guard let idx = newValue else { return }
+            if idx < clampedStart || idx >= pageEnd {
+                pageStart = (idx / Self.pageSize) * Self.pageSize
+            }
+        }
+    }
+
+    private func paginationControls(start: Int, end: Int) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                pageStart = max(0, start - Self.pageSize)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .disabled(start == 0)
+
+            Text("\(start + 1)–\(end) of \(functionCalls.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            Button {
+                pageStart = min(start + Self.pageSize, lastPageStart())
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.borderless)
+            .disabled(end >= functionCalls.count)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func clampedPageStart() -> Int {
+        max(0, min(pageStart, lastPageStart()))
+    }
+
+    private func lastPageStart() -> Int {
+        guard functionCalls.count > 0 else { return 0 }
+        let last = ((functionCalls.count - 1) / Self.pageSize) * Self.pageSize
+        return last
+    }
+
+    private func timelineStrip(calls: [TraceFunctionCall], baseIndex: Int, denom: Int) -> some View {
         GeometryReader { geo in
             let width = geo.size.width
+            let denominator = max(1, denom)
 
             Canvas { context, size in
-                guard !functionCalls.isEmpty, totalEntryCount > 0 else { return }
+                guard !calls.isEmpty else { return }
 
                 var x: CGFloat = 0
-                for (i, call) in functionCalls.enumerated() {
-                    let w = max(2, CGFloat(call.entryCount) / CGFloat(totalEntryCount) * width)
-                    let isSelected = selectedCallIndex == i
+                for (i, call) in calls.enumerated() {
+                    let w = max(2, CGFloat(call.entryCount) / CGFloat(denominator) * width)
+                    let absoluteIndex = baseIndex + i
+                    let isSelected = selectedCallIndex == absoluteIndex
 
                     let hue = functionHue(call.functionName)
                     let color = Color(
@@ -32,7 +99,6 @@ struct ITraceTimeline: View {
                     let rect = CGRect(x: x, y: 0, width: w, height: size.height)
                     context.fill(Path(rect), with: .color(color))
 
-                    // Separator line.
                     if i > 0 {
                         let sep = CGRect(x: x, y: 2, width: 0.5, height: size.height - 4)
                         context.fill(
@@ -41,14 +107,12 @@ struct ITraceTimeline: View {
                         )
                     }
 
-                    // Selection indicator.
                     if isSelected {
                         let inset = rect.insetBy(dx: 0.5, dy: 0.5)
                         let borderColor: Color = colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.7)
                         context.stroke(Path(roundedRect: inset, cornerRadius: 2), with: .color(borderColor), lineWidth: 1.5)
                     }
 
-                    // Draw label if segment is wide enough.
                     if w > 30 {
                         let label = call.shortName
                         let textRect = CGRect(x: x + 6, y: 2, width: w - 12, height: size.height - 4)
@@ -70,8 +134,8 @@ struct ITraceTimeline: View {
             #if canImport(AppKit)
             .overlay {
                 TimelineTooltipOverlay(
-                    functionCalls: functionCalls,
-                    totalEntryCount: totalEntryCount,
+                    functionCalls: calls,
+                    totalEntryCount: denominator,
                     width: width,
                     height: stripHeight
                 )
@@ -79,34 +143,24 @@ struct ITraceTimeline: View {
             #endif
             .contentShape(Rectangle())
             .onTapGesture { location in
-                selectedCallIndex = callIndex(at: location.x, width: width)
+                selectedCallIndex = callIndex(at: location.x, width: width, calls: calls, baseIndex: baseIndex, denom: denominator)
             }
         }
         .frame(height: stripHeight)
     }
 
-    private func segmentFrame(index: Int, width: CGFloat) -> (x: CGFloat, width: CGFloat) {
-        var accX: CGFloat = 0
-        for (i, call) in functionCalls.enumerated() {
-            let w = max(2, CGFloat(call.entryCount) / CGFloat(max(1, totalEntryCount)) * width)
-            if i == index { return (accX, w) }
-            accX += w
-        }
-        return (0, 0)
-    }
-
-    private func callIndex(at x: CGFloat, width: CGFloat) -> Int {
-        guard !functionCalls.isEmpty, totalEntryCount > 0 else { return 0 }
+    private func callIndex(at x: CGFloat, width: CGFloat, calls: [TraceFunctionCall], baseIndex: Int, denom: Int) -> Int {
+        guard !calls.isEmpty, denom > 0 else { return baseIndex }
 
         var accX: CGFloat = 0
-        for (i, call) in functionCalls.enumerated() {
-            let w = max(2, CGFloat(call.entryCount) / CGFloat(totalEntryCount) * width)
+        for (i, call) in calls.enumerated() {
+            let w = max(2, CGFloat(call.entryCount) / CGFloat(denom) * width)
             if x < accX + w {
-                return i
+                return baseIndex + i
             }
             accX += w
         }
-        return functionCalls.count - 1
+        return baseIndex + calls.count - 1
     }
 
     private func functionHue(_ name: String) -> Double {

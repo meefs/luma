@@ -25,7 +25,7 @@ struct SidebarView: View {
                     let node = workspace.engine.node(forSessionID: session.id)
                     let instruments = workspace.engine.instrumentsBySession[session.id] ?? []
                     let insights = workspace.engine.insightsBySession[session.id] ?? []
-                    let captures = workspace.engine.capturesBySession[session.id] ?? []
+                    let traces = workspace.engine.tracesBySession[session.id] ?? []
 
                     SidebarSessionHeaderRow(
                         session: session,
@@ -33,6 +33,7 @@ struct SidebarView: View {
                         workspace: workspace,
                         selection: $selection
                     )
+                    .tag(SidebarItemID.session(session.id))
 
                     SidebarSessionREPLRow(sessionID: session.id)
                         .tag(SidebarItemID.repl(session.id))
@@ -58,14 +59,14 @@ struct SidebarView: View {
                         .tag(SidebarItemID.insight(session.id, insight.id))
                     }
 
-                    ForEach(captures.sorted(by: { $0.capturedAt < $1.capturedAt })) { capture in
-                        SidebarITraceCaptureRow(
+                    ForEach(traces.sorted(by: { $0.startedAt < $1.startedAt })) { trace in
+                        SidebarITraceRow(
                             session: session,
-                            capture: capture,
+                            trace: trace,
                             workspace: workspace,
                             selection: $selection
                         )
-                        .tag(SidebarItemID.itraceCapture(session.id, capture.id))
+                        .tag(SidebarItemID.itrace(session.id, trace.id))
                     }
                 }
 
@@ -286,10 +287,11 @@ private struct SidebarSessionHeaderRow: View {
         try? workspace.store.deleteSession(id: sessionID)
 
         switch selection {
-        case .repl(let id) where id == sessionID,
+        case .session(let id) where id == sessionID,
+            .repl(let id) where id == sessionID,
             .instrument(let id, _) where id == sessionID,
             .insight(let id, _) where id == sessionID,
-            .itraceCapture(let id, _) where id == sessionID:
+            .itrace(let id, _) where id == sessionID:
             selection = .notebook
         default:
             break
@@ -438,18 +440,19 @@ private struct SidebarInsightRow: View {
     }
 }
 
-private struct SidebarITraceCaptureRow: View {
+private struct SidebarITraceRow: View {
     let session: LumaCore.ProcessSession
-    let capture: LumaCore.ITraceCaptureRecord
+    let trace: LumaCore.ITrace
     @ObservedObject var workspace: Workspace
     @Binding var selection: SidebarItemID?
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "waveform.path")
+            Image(systemName: trace.isRunning ? "record.circle" : "waveform.path")
                 .frame(width: subrowIconWidth, alignment: .center)
                 .font(.system(size: 12))
-            Text(capture.displayName)
+                .foregroundStyle(trace.isRunning ? .red : .primary)
+            Text(trace.displayName)
             Spacer()
         }
         .font(.callout)
@@ -457,17 +460,16 @@ private struct SidebarITraceCaptureRow: View {
         .padding(.leading, 20)
         .contextMenu {
             Button(role: .destructive) {
-                deleteCapture()
+                deleteTrace()
             } label: {
-                Label("Delete Capture", systemImage: "trash")
+                Label("Delete Trace", systemImage: "trash")
             }
         }
     }
 
-    private func deleteCapture() {
-        // ITraceCaptureRecord doesn't have a store.delete yet,
-        // but we can at least clean up the selection
-        if selection == .itraceCapture(session.id, capture.id) {
+    private func deleteTrace() {
+        workspace.engine.deleteITrace(id: trace.id, sessionID: session.id)
+        if selection == .itrace(session.id, trace.id) {
             selection = .repl(session.id)
         }
     }

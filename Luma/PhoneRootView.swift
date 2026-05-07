@@ -18,7 +18,7 @@ struct PhoneRootView: View {
         Group {
             if let dbURL {
                 PhoneMainView(
-                    dbURL: dbURL,
+                    projectURL: dbURL,
                     documentActions: PhoneDocumentActions(
                         currentDisplayName: Self.displayName(for: dbURL),
                         new: returnToWelcome,
@@ -73,10 +73,7 @@ struct PhoneRootView: View {
     @MainActor
     private func openFromLab(_ lab: WelcomeModel.LabSummary) {
         let url = Self.untitledURL(named: lab.title)
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: Data())
-        }
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         CollaborationJoinQueue.shared.enqueue(labID: lab.id)
         dbURL = url
         LumaAppState.shared.lastDocumentPath = url.path
@@ -85,10 +82,7 @@ struct PhoneRootView: View {
     @MainActor
     private func openFreshUntitled() {
         let url = Self.nextUntitledURL()
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: Data())
-        }
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         dbURL = url
         LumaAppState.shared.lastDocumentPath = url.path
     }
@@ -224,14 +218,24 @@ private struct LumaExportDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let staging = FileManager.default.temporaryDirectory
-            .appendingPathComponent("luma-export-\(UUID().uuidString).luma")
-        defer { try? FileManager.default.removeItem(at: staging) }
+        let fm = FileManager.default
+        let staging = fm.temporaryDirectory
+            .appendingPathComponent("luma-export-\(UUID().uuidString).luma", isDirectory: true)
+        defer { try? fm.removeItem(at: staging) }
 
-        try ProjectStore.exportSnapshot(from: sourceURL, to: staging)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
 
-        let data = try Data(contentsOf: staging)
-        return FileWrapper(regularFileWithContents: data)
+        let dbSource = sourceURL.appendingPathComponent("db.sqlite")
+        let dbDest = staging.appendingPathComponent("db.sqlite")
+        try ProjectStore.exportSnapshot(from: dbSource, to: dbDest)
+
+        let tracesSource = sourceURL.appendingPathComponent("traces", isDirectory: true)
+        let tracesDest = staging.appendingPathComponent("traces", isDirectory: true)
+        if fm.fileExists(atPath: tracesSource.path) {
+            try fm.copyItem(at: tracesSource, to: tracesDest)
+        }
+
+        return try FileWrapper(url: staging, options: .immediate)
     }
 }
 

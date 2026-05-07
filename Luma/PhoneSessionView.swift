@@ -26,7 +26,7 @@ struct PhoneSessionView: View {
         case repl = "REPL"
         case instruments = "Instruments"
         case insights = "Insights"
-        case captures = "Captures"
+        case traces = "Traces"
 
         var id: Self { self }
 
@@ -35,7 +35,7 @@ struct PhoneSessionView: View {
             case .repl: return "terminal"
             case .instruments: return "waveform.path.ecg"
             case .insights: return "doc.text.magnifyingglass"
-            case .captures: return "waveform.path"
+            case .traces: return "waveform.path"
             }
         }
     }
@@ -274,8 +274,8 @@ struct PhoneSessionView: View {
         case .insights:
             insightsList
 
-        case .captures:
-            capturesList
+        case .traces:
+            tracesList
         }
     }
 
@@ -359,24 +359,24 @@ struct PhoneSessionView: View {
     }
 
     @ViewBuilder
-    private var capturesList: some View {
-        let captures = (workspace.engine.capturesBySession[sessionID] ?? [])
-            .sorted { $0.capturedAt < $1.capturedAt }
-        if captures.isEmpty {
+    private var tracesList: some View {
+        let traces = (workspace.engine.tracesBySession[sessionID] ?? [])
+            .sorted { $0.startedAt < $1.startedAt }
+        if traces.isEmpty {
             segmentEmptyState(
                 icon: "waveform.path",
-                title: "No captures yet",
-                hint: "Run an ITrace session to capture one.",
+                title: "No traces yet",
+                hint: "Run an ITrace session to record one.",
                 actionTitle: nil,
                 action: nil
             )
         } else {
             List {
-                ForEach(captures) { capture in
+                ForEach(traces) { trace in
                     Button {
-                        path.append(.capture(sessionID, capture.id))
+                        path.append(.trace(sessionID, trace.id))
                     } label: {
-                        CaptureRow(capture: capture)
+                        TraceRow(trace: trace)
                     }
                     .buttonStyle(.plain)
                 }
@@ -512,15 +512,15 @@ private struct InsightRow: View {
     }
 }
 
-private struct CaptureRow: View {
-    let capture: LumaCore.ITraceCaptureRecord
+private struct TraceRow: View {
+    let trace: LumaCore.ITrace
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "waveform.path")
+            Image(systemName: trace.isRunning ? "record.circle" : "waveform.path")
                 .frame(width: 28, height: 28)
-                .foregroundStyle(.tint)
-            Text(capture.displayName).font(.body)
+                .foregroundStyle(trace.isRunning ? .red : .tint)
+            Text(trace.displayName).font(.body)
             Spacer()
             Image(systemName: "chevron.right")
                 .font(.caption)

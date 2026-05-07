@@ -4,35 +4,63 @@ import UniformTypeIdentifiers
 import LumaCore
 
 struct MainWindowView: View {
-    @State private var uiState = ProjectUIStateValue()
     @StateObject private var workspace: Workspace
 
-    private let dbURL: URL
+    private let projectURL: URL
     private let fileURL: URL?
     private let project: Binding<LumaProject>?
 
-    init(dbURL: URL, fileURL: URL? = nil, project: Binding<LumaProject>? = nil) {
-        self.dbURL = dbURL
+    init(projectURL: URL, fileURL: URL? = nil, project: Binding<LumaProject>? = nil) {
+        self.projectURL = projectURL
         self.fileURL = fileURL
         self.project = project
+
+        let fm = FileManager.default
+        let dbURL = projectURL.appendingPathComponent("db.sqlite")
+        let tracesURL = projectURL.appendingPathComponent("traces", isDirectory: true)
+        try? fm.createDirectory(at: projectURL, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: tracesURL, withIntermediateDirectories: true)
+
         let store = try! ProjectStore(path: dbURL.path)
+        let traces = try! TraceStore(directory: tracesURL)
         self._workspace = StateObject(
-            wrappedValue: Workspace(store: store, gitHubAuth: sharedGitHubAuth())
+            wrappedValue: Workspace(store: store, traces: traces, gitHubAuth: sharedGitHubAuth())
         )
     }
 
     private var restorationPath: String {
-        (fileURL ?? dbURL).path
+        (fileURL ?? projectURL).path
     }
 
     @State private var collapsedEventBaselineVersion: Int = 0
     @State private var collapsedNewEvents: Int = 0
     @State private var isShowingHostingBlockedAlert = false
 
+    private var selection: Binding<SidebarItemID?> {
+        Binding(
+            get: { workspace.selectedSidebarItem },
+            set: { workspace.selectedSidebarItem = $0 }
+        )
+    }
+
+    private var isEventStreamCollapsed: Binding<Bool> {
+        Binding(
+            get: { workspace.projectUIState.isEventStreamCollapsed },
+            set: { workspace.setEventStreamCollapsed($0) }
+        )
+    }
+
+    private var eventStreamBottomHeight: Binding<Double> {
+        Binding(
+            get: { workspace.projectUIState.eventStreamBottomHeight },
+            set: { workspace.setEventStreamBottomHeight($0) }
+        )
+    }
+
     var body: some View {
         CollapsibleVSplitView(
-            isCollapsed: $uiState.isEventStreamCollapsed,
-            bottomHeight: $uiState.eventStreamBottomHeight
+            isCollapsed: isEventStreamCollapsed,
+            bottomHeight: eventStreamBottomHeight
         ) {
             mainContent
         } bottom: {
@@ -42,7 +70,7 @@ struct MainWindowView: View {
         .toolbar {
             WorkspaceToolbar(
                 workspace: workspace,
-                selection: $uiState.selectedItemID,
+                selection: selection,
                 isShowingHostingBlockedAlert: $isShowingHostingBlockedAlert
             )
         }
@@ -65,8 +93,8 @@ struct MainWindowView: View {
         )
         .task {
             await workspace.configurePersistence()
-            if uiState.selectedItemID == nil, !workspace.engine.notebookEntries.isEmpty {
-                uiState.selectedItemID = .notebook
+            if workspace.selectedSidebarItem == nil, !workspace.engine.notebookEntries.isEmpty {
+                workspace.selectedSidebarItem = .notebook
             }
         }
         .onChange(of: restorationPath, initial: true) { _, newPath in
@@ -85,7 +113,7 @@ struct MainWindowView: View {
             project?.wrappedValue.revision &+= 1
         }
         .onChange(of: workspace.engine.eventLog.totalReceived) { _, newVersion in
-            if uiState.isEventStreamCollapsed {
+            if workspace.projectUIState.isEventStreamCollapsed {
                 let delta = max(0, newVersion - collapsedEventBaselineVersion)
                 collapsedNewEvents += delta
                 collapsedEventBaselineVersion = newVersion
@@ -94,7 +122,7 @@ struct MainWindowView: View {
                 collapsedNewEvents = 0
             }
         }
-        .onChange(of: uiState.isEventStreamCollapsed) { _, isCollapsed in
+        .onChange(of: workspace.projectUIState.isEventStreamCollapsed) { _, isCollapsed in
             collapsedEventBaselineVersion = workspace.engine.eventLog.totalReceived
             if !isCollapsed {
                 collapsedNewEvents = 0
@@ -132,13 +160,13 @@ struct MainWindowView: View {
         NavigationSplitView {
             SidebarView(
                 workspace: workspace,
-                selection: $uiState.selectedItemID
+                selection: selection
             )
             .navigationSplitViewColumnWidth(ideal: 180)
         } detail: {
             DetailView(
                 workspace: workspace,
-                selection: $uiState.selectedItemID
+                selection: selection
             )
         }
         .sheet(
@@ -199,7 +227,7 @@ struct MainWindowView: View {
             if let existingNode = workspace.engine.processNodes.first(where: {
                 $0.deviceID == device.id && $0.pid == proc.pid
             }) {
-                uiState.selectedItemID = .repl(workspace.engine.sessionID(for: existingNode))
+                workspace.selectedSidebarItem = .repl(workspace.engine.sessionID(for: existingNode))
                 return
             }
 
@@ -239,7 +267,7 @@ struct MainWindowView: View {
                 session: sessionRecord
             )
 
-            uiState.selectedItemID = .repl(sessionRecord.id)
+            workspace.selectedSidebarItem = .repl(sessionRecord.id)
         }
     }
 
@@ -247,23 +275,23 @@ struct MainWindowView: View {
         ZStack(alignment: .bottomLeading) {
             EventStreamView(
                 workspace: workspace,
-                selection: $uiState.selectedItemID,
+                selection: selection,
                 onCollapseRequested: {
-                    uiState.isEventStreamCollapsed = true
+                    workspace.setEventStreamCollapsed(true)
                 }
             )
-            .opacity(uiState.isEventStreamCollapsed ? 0 : 1)
+            .opacity(workspace.projectUIState.isEventStreamCollapsed ? 0 : 1)
             .clipped()
 
             collapsedEventStreamBar
-                .opacity(uiState.isEventStreamCollapsed ? 1 : 0)
+                .opacity(workspace.projectUIState.isEventStreamCollapsed ? 1 : 0)
         }
     }
 
     private var collapsedEventStreamBar: some View {
         HStack {
             Button {
-                uiState.isEventStreamCollapsed = false
+                workspace.setEventStreamCollapsed(false)
                 collapsedNewEvents = 0
                 collapsedEventBaselineVersion = workspace.engine.eventLog.totalReceived
             } label: {
@@ -309,11 +337,12 @@ struct WorkspaceToolbar: ToolbarContent {
         case .notebook, .package(_), .customInstrumentDef(_):
             return nil
 
-        case .repl(let sessionID),
+        case .session(let sessionID),
+            .repl(let sessionID),
             .instrument(let sessionID, _),
             .instrumentComponent(let sessionID, _, _, _),
             .insight(let sessionID, _),
-            .itraceCapture(let sessionID, _):
+            .itrace(let sessionID, _):
             return workspace.engine.session(id: sessionID)
         }
     }
@@ -324,11 +353,12 @@ struct WorkspaceToolbar: ToolbarContent {
         switch id {
         case .notebook, .package(_), .customInstrumentDef(_):
             return nil
-        case .repl(let sessionID),
+        case .session(let sessionID),
+            .repl(let sessionID),
             .instrument(let sessionID, _),
             .instrumentComponent(let sessionID, _, _, _),
             .insight(let sessionID, _),
-            .itraceCapture(let sessionID, _):
+            .itrace(let sessionID, _):
             return workspace.engine.node(forSessionID: sessionID)
         }
     }
@@ -434,22 +464,6 @@ struct WorkspaceToolbar: ToolbarContent {
             .help("Show or hide the collaboration panel")
             .keyboardShortcut("c", modifiers: [.command, .option])
         }
-    }
-}
-
-private struct ProjectUIStateValue: Equatable {
-    var selectedItemID: SidebarItemID?
-    var isEventStreamCollapsed: Bool
-    var eventStreamBottomHeight: Double
-
-    init(
-        selectedItemID: SidebarItemID? = nil,
-        isEventStreamCollapsed: Bool = true,
-        eventStreamBottomHeight: Double = 0
-    ) {
-        self.selectedItemID = selectedItemID
-        self.isEventStreamCollapsed = isEventStreamCollapsed
-        self.eventStreamBottomHeight = eventStreamBottomHeight
     }
 }
 

@@ -3,7 +3,7 @@ import LumaCore
 import SwiftUI
 
 struct ITraceDetailView: View {
-    let capture: LumaCore.ITraceCaptureRecord
+    let trace: LumaCore.ITrace
     let session: LumaCore.ProcessSession
     @ObservedObject var workspace: Workspace
     @Binding var selection: SidebarItemID?
@@ -22,7 +22,7 @@ struct ITraceDetailView: View {
     @State private var cfgSelectedNodeKey: CFGGraph.NodeKey?
     @State private var cfgWindowRange: Range<Int> = 0..<0
     @State private var showDiffPicker = false
-    @State private var diffTarget: LumaCore.ITraceCaptureRecord?
+    @State private var diffTarget: LumaCore.ITrace?
 
     @FocusState private var isFocused: Bool
 
@@ -31,6 +31,15 @@ struct ITraceDetailView: View {
     private var node: LumaCore.ProcessNode? {
         workspace.engine.node(forSessionID: session.id)
     }
+
+    private var liveTrace: LumaCore.ITrace {
+        workspace.engine.tracesBySession[session.id]?.first(where: { $0.id == trace.id }) ?? trace
+    }
+
+    @State private var lastDecodedSize: Int = -1
+    @State private var redecodeTask: Task<Void, Never>?
+    @State private var loadProgress: (loaded: Int, total: Int)?
+    @State private var serverTotalSize: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -101,15 +110,60 @@ struct ITraceDetailView: View {
             }
         }
         .onAppear { decodeTrace() }
+        .onChange(of: liveTrace.dataSize) { _, newSize in
+            scheduleRedecodeIfNeeded(currentSize: newSize)
+        }
+        .task(id: trace.id) {
+            for await invalidation in workspace.engine.traceCacheInvalidations
+                where invalidation.traceID == trace.id
+            {
+                serverTotalSize = invalidation.knownTotalSize
+                scheduleRedecodeIfNeeded(currentSize: invalidation.knownTotalSize)
+            }
+        }
         .onChange(of: colorScheme) { _, _ in
             disasmCache.removeAll()
         }
     }
 
+    private func renderPrefix(snapshot: LumaCore.ITrace) async {
+        do {
+            let preview = try await workspace.engine.loadTraceDataPrefix(
+                traceID: snapshot.id,
+                sessionID: session.id,
+                length: Self.firstPaintBytes
+            )
+            let result = try ITraceDecoder.decode(
+                traceData: preview,
+                metadataJSON: snapshot.metadataJSON
+            )
+            disassembler = TraceDisassembler(
+                decoded: result,
+                processInfo: session.processInfo!,
+                liveNode: node
+            )
+            decoded = result
+            isLoading = false
+            rebuildCFG(decoded: result)
+        } catch {
+        }
+    }
+
+    private func scheduleRedecodeIfNeeded(currentSize: Int) {
+        guard currentSize != lastDecodedSize else { return }
+        redecodeTask?.cancel()
+        redecodeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+            decodeTrace()
+        }
+    }
+
     private var header: some View {
-        HStack {
+        let live = liveTrace
+        return HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(capture.displayName)
+                Text(live.displayName)
                     .font(.headline)
                 HStack(spacing: 12) {
                     if let decoded {
@@ -117,12 +171,22 @@ struct ITraceDetailView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    if capture.lost > 0 {
-                        Text("\(capture.lost) records lost")
+                    if live.isRunning {
+                        Label("recording", systemImage: "record.circle")
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                    Text(capture.capturedAt.formatted(date: .abbreviated, time: .standard))
+                    if live.lost > 0 {
+                        Text("\(live.lost) records lost")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    if let loadProgress {
+                        Text("loading \(formatBytes(loadProgress.loaded)) of \(formatBytes(loadProgress.total))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text((live.stoppedAt ?? live.startedAt).formatted(date: .abbreviated, time: .standard))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -130,15 +194,26 @@ struct ITraceDetailView: View {
 
             Spacer()
 
+            if live.isRunning, isThreadOrigin(live.origin) {
+                Button {
+                    Task { @MainActor in
+                        await workspace.engine.stopThreadTrace(traceID: trace.id, sessionID: session.id)
+                    }
+                } label: {
+                    Label("Stop", systemImage: "stop.circle")
+                }
+                .tint(.red)
+            }
+
             Button("Compare…") {
                 showDiffPicker = true
             }
-            .disabled(otherCapturesForSameHook.isEmpty)
+            .disabled(otherTracesForSameHook.isEmpty)
             .popover(isPresented: $showDiffPicker) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Compare with:")
                         .font(.headline)
-                    List(otherCapturesForSameHook) { other in
+                    List(otherTracesForSameHook) { other in
                         Button(other.displayName) {
                             diffTarget = other
                             showDiffPicker = false
@@ -270,43 +345,71 @@ struct ITraceDetailView: View {
         .frame(minWidth: 200, idealWidth: 250, maxWidth: 300)
     }
 
-    private var otherCapturesForSameHook: [LumaCore.ITraceCaptureRecord] {
-        let captures = (try? workspace.store.fetchITraceCaptures(sessionID: session.id)) ?? []
-        return captures
-            .filter { $0.hookID == capture.hookID && $0.id != capture.id }
-            .sorted(by: { $0.capturedAt < $1.capturedAt })
+    private var otherTracesForSameHook: [LumaCore.ITrace] {
+        let traces = (try? workspace.store.fetchITraces(sessionID: session.id)) ?? []
+        return traces
+            .filter { sameHook($0.origin, trace.origin) && $0.id != trace.id }
+            .sorted(by: { $0.startedAt < $1.startedAt })
+    }
+
+    private func formatBytes(_ count: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(count))
+    }
+
+    private func isThreadOrigin(_ origin: LumaCore.ITrace.Origin) -> Bool {
+        if case .thread = origin { return true }
+        return false
+    }
+
+    private func sameHook(_ a: LumaCore.ITrace.Origin, _ b: LumaCore.ITrace.Origin) -> Bool {
+        if case .functionCall(let aHook, _) = a, case .functionCall(let bHook, _) = b {
+            return aHook == bHook
+        }
+        return false
     }
 
     @ViewBuilder
-    private func diffSheet(with target: LumaCore.ITraceCaptureRecord) -> some View {
-        if let left = decoded,
-            let right = try? ITraceDecoder.decode(
-                traceData: target.traceData, metadataJSON: target.metadataJSON)
-        {
-            ITraceDiffView(
-                left: left,
-                right: right,
-                leftName: capture.displayName,
-                rightName: target.displayName
-            )
-            .frame(minWidth: 700, minHeight: 500)
-        } else {
-            Text("Failed to decode one or both traces.")
-                .padding()
-        }
+    private func diffSheet(with target: LumaCore.ITrace) -> some View {
+        DiffLoader(
+            engine: workspace.engine,
+            sessionID: session.id,
+            leftDecoded: decoded,
+            target: target,
+            leftName: trace.displayName,
+            expectedSize: target.dataSize
+        )
     }
 
+    private static let firstPaintBytes = 256 * 1024
+
     private func decodeTrace() {
-        isLoading = true
+        let snapshot = liveTrace
+        let isFirstDecode = (decoded == nil)
+        isLoading = isFirstDecode
         errorText = nil
 
         Task { @MainActor in
+            if isFirstDecode, snapshot.dataSize > Self.firstPaintBytes {
+                await renderPrefix(snapshot: snapshot)
+            }
             defer { isLoading = false }
 
             do {
+                let expected = max(snapshot.dataSize, serverTotalSize)
+                let traceData = try await workspace.engine.loadTraceData(
+                    traceID: snapshot.id,
+                    sessionID: session.id,
+                    expectedSize: expected,
+                    onProgress: { loaded, total in
+                        loadProgress = (loaded, total)
+                    }
+                )
+                loadProgress = nil
                 let result = try ITraceDecoder.decode(
-                    traceData: capture.traceData,
-                    metadataJSON: capture.metadataJSON
+                    traceData: traceData,
+                    metadataJSON: snapshot.metadataJSON
                 )
 
                 disassembler = TraceDisassembler(
@@ -316,12 +419,15 @@ struct ITraceDetailView: View {
                 )
 
                 decoded = result
+                lastDecodedSize = snapshot.dataSize
 
-                if !result.functionCalls.isEmpty {
-                    selectedCallIndex = 0
-                }
-                if !result.entries.isEmpty {
-                    selectedEntryIndex = 0
+                if isFirstDecode {
+                    if !result.functionCalls.isEmpty {
+                        selectedCallIndex = 0
+                    }
+                    if !result.entries.isEmpty {
+                        selectedEntryIndex = 0
+                    }
                 }
 
                 rebuildCFG(decoded: result)
@@ -442,5 +548,47 @@ private struct ITraceEntryRow: View {
         .padding(.horizontal, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+    }
+}
+
+private struct DiffLoader: View {
+    let engine: LumaCore.Engine
+    let sessionID: UUID
+    let leftDecoded: DecodedITrace?
+    let target: LumaCore.ITrace
+    let leftName: String
+    let expectedSize: Int
+
+    @State private var rightDecoded: DecodedITrace?
+    @State private var errorText: String?
+
+    var body: some View {
+        Group {
+            if let leftDecoded, let rightDecoded {
+                ITraceDiffView(
+                    left: leftDecoded,
+                    right: rightDecoded,
+                    leftName: leftName,
+                    rightName: target.displayName
+                )
+                .frame(minWidth: 700, minHeight: 500)
+            } else if let errorText {
+                Text(errorText).padding()
+            } else {
+                ProgressView().padding()
+            }
+        }
+        .task(id: target.id) {
+            do {
+                let data = try await engine.loadTraceData(
+                    traceID: target.id,
+                    sessionID: sessionID,
+                    expectedSize: expectedSize
+                )
+                rightDecoded = try ITraceDecoder.decode(traceData: data, metadataJSON: target.metadataJSON)
+            } catch {
+                errorText = "Failed to decode: \(error.localizedDescription)"
+            }
+        }
     }
 }

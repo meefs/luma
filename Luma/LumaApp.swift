@@ -33,7 +33,7 @@ func sharedGitHubAuth() -> GitHubAuth { sharedWelcomeModel.gitHubAuth }
 
             DocumentGroup(newDocument: LumaProject()) { configuration in
                 MainWindowView(
-                    dbURL: configuration.document.workingDBURL,
+                    projectURL: configuration.document.workingProjectURL,
                     fileURL: configuration.fileURL,
                     project: configuration.$document
                 )

@@ -34,10 +34,7 @@ struct WelcomeWindow: View {
     private func createFromLab(_ lab: WelcomeModel.LabSummary) {
         let url = LumaAppPaths.shared.untitledDirectory
             .appendingPathComponent("\(sanitizedFilename(for: lab.title)).luma")
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: Data())
-        }
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         CollaborationJoinQueue.shared.enqueue(labID: lab.id)
         NSDocumentController.shared.openDocument(
             withContentsOf: url,
