@@ -408,7 +408,7 @@ public final class ProjectStore: Sendable {
 
     public func deleteITrace(id: UUID) throws {
         try db.write { db in
-            _ = try ITrace.deleteOne(db, key: id.uuidString)
+            _ = try ITrace.deleteOne(db, key: id)
         }
     }
 
