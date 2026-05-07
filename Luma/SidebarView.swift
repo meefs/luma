@@ -446,6 +446,8 @@ private struct SidebarITraceRow: View {
     @ObservedObject var workspace: Workspace
     @Binding var selection: SidebarItemID?
 
+    @State private var isShowingDeleteConfirm = false
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: trace.isRunning ? "record.circle" : "waveform.path")
@@ -460,10 +462,22 @@ private struct SidebarITraceRow: View {
         .padding(.leading, 20)
         .contextMenu {
             Button(role: .destructive) {
-                deleteTrace()
+                isShowingDeleteConfirm = true
             } label: {
                 Label("Delete Trace", systemImage: "trash")
             }
+        }
+        .confirmationDialog(
+            "Delete trace \(trace.displayName)?",
+            isPresented: $isShowingDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                deleteTrace()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the recorded ITrace data from the project.")
         }
     }
 
