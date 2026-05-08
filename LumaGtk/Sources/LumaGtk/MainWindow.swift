@@ -55,6 +55,7 @@ final class MainWindow {
     private var sessionsRowKinds: [SessionsRow] = []
     private var sessionNameLabels: [UUID: Label] = [:]
     private var sessionDeviceLabels: [UUID: Label] = [:]
+    private var sessionArmIcons: [UUID: Gtk.Image] = [:]
     private var instrumentRowLabels: [UUID: Label] = [:]
     private var instrumentRowIconHosts: [UUID: Box] = [:]
     private var traceRowIcons: [UUID: Gtk.Image] = [:]
@@ -311,6 +312,17 @@ final class MainWindow {
         toastOverlay?.show(message, durationSeconds: durationSeconds)
     }
 
+    private func handleUserNotification(_ notification: LumaCore.UserNotification) {
+        let summary: String
+        if let message = notification.message, !message.isEmpty {
+            summary = "\(notification.title) — \(message)"
+        } else {
+            summary = notification.title
+        }
+        let duration: Double = notification.severity == .error ? 8 : 3
+        showToast(summary, durationSeconds: duration)
+    }
+
     func documentDidChange() {
         if let updated = application?.documentForWindow(self) {
             self.document = updated
@@ -399,6 +411,9 @@ final class MainWindow {
             self.desktopNotifier.notifyEntryAdded(entry, labID: engine.collaboration.labID)
         }
         engine.onInstalledPackagesChanged = { [weak self] packages in self?.renderPackages(packages) }
+        engine.onUserNotification = { [weak self] notification in
+            self?.handleUserNotification(notification)
+        }
         engine.customInstruments.observers.append { [weak self] in
             self?.renderCustomInstruments()
             self?.refreshInstrumentRowVisuals()
@@ -493,9 +508,20 @@ final class MainWindow {
             },
             onSpawn: { [weak self] device, config in
                 self?.spawn(device: device, config: config, reusing: existing)
+            },
+            onArm: { [weak self] device, config, regex in
+                self?.armForLaunch(device: device, config: config, regex: regex)
             }
         )
         picker.present()
+    }
+
+    private func armForLaunch(device: Frida.Device, config: SpawnConfig, regex: String) {
+        guard let engine else { return }
+        Task { @MainActor in
+            let session = await engine.armNewSession(device: device, config: config, matchPattern: regex)
+            self.select(.session(session.id))
+        }
     }
 
     private func spawn(
@@ -1185,9 +1211,14 @@ final class MainWindow {
 
         guard let engine else {
             if SessionDetachedBanner.shouldShow(for: session) {
-                let banner = SessionDetachedBanner.make(for: session) { [weak self] in
-                    self?.reestablishSession(id: session.id)
-                }
+                let banner = SessionDetachedBanner.make(
+                    for: session,
+                    gatingActive: false,
+                    onReattach: { [weak self] in self?.reestablishSession(id: session.id) },
+                    onDisarm: { },
+                    onArm: { [weak self] in self?.presentArmDialog(session: session) },
+                    onResumeGating: { }
+                )
                 column.append(child: banner)
             }
             let subtitle = "\(session.deviceName) · pid \(session.lastKnownPID)"
@@ -1207,6 +1238,9 @@ final class MainWindow {
         }
         detail.onReestablish = { [weak self] in
             self?.reestablishSession(id: session.id)
+        }
+        detail.onArmRequested = { [weak self] in
+            self?.presentArmDialog(session: session)
         }
         detail.applySessionState()
         column.append(child: detail.widget)
@@ -1391,6 +1425,7 @@ final class MainWindow {
             }
             sessionNameLabels[session.id]?.label = session.processName
             sessionDeviceLabels[session.id]?.label = session.deviceName
+            sessionArmIcons[session.id]?.visible = isArmed(session)
             if currentREPLSessionID == session.id {
                 currentREPLPane?.applySessionState()
             }
@@ -1417,6 +1452,7 @@ final class MainWindow {
             sessionDetailViews.removeValue(forKey: id)
             sessionNameLabels.removeValue(forKey: id)
             sessionDeviceLabels.removeValue(forKey: id)
+            sessionArmIcons.removeValue(forKey: id)
             switch selection {
             case .session(let sid), .repl(let sid), .instrument(let sid, _), .insight(let sid, _), .itrace(let sid, _):
                 if sid == id {
@@ -1487,10 +1523,18 @@ final class MainWindow {
         let titles = Box(orientation: .vertical, spacing: 2)
         titles.halign = .start
         titles.hexpand = true
+        let nameRow = Box(orientation: .horizontal, spacing: 4)
         let nameLabel = Label(str: session.processName)
         nameLabel.halign = .start
         nameLabel.add(cssClass: "title-4")
-        titles.append(child: nameLabel)
+        nameRow.append(child: nameLabel)
+        let armIcon = Gtk.Image(iconName: "find-location-symbolic")
+        armIcon.pixelSize = 12
+        armIcon.add(cssClass: "accent")
+        armIcon.tooltipText = "Armed for next matching launch"
+        armIcon.visible = isArmed(session)
+        nameRow.append(child: armIcon)
+        titles.append(child: nameRow)
         let deviceLabel = Label(str: session.deviceName)
         deviceLabel.halign = .start
         deviceLabel.add(cssClass: "caption")
@@ -1499,6 +1543,7 @@ final class MainWindow {
         headerBox.append(child: titles)
         sessionNameLabels[session.id] = nameLabel
         sessionDeviceLabels[session.id] = deviceLabel
+        sessionArmIcons[session.id] = armIcon
 
         headerRow.set(child: headerBox)
         attachSessionContextMenu(row: headerRow, anchor: headerBox, session: session)
@@ -1755,16 +1800,97 @@ final class MainWindow {
                     self?.showToast("Detached \(session.processName)")
                 }
             })
-        } else {
+        } else if session.lastAttachedAt != nil {
             topSection.append(.init("Reestablish…") { [weak self] in
                 self?.reestablishSession(id: session.id)
             })
         }
+
+        let armingItem: ContextMenu.Item
+        if isArmed(session) {
+            armingItem = .init("Disarm") { [weak self] in self?.disarm(sessionID: session.id) }
+        } else {
+            armingItem = .init("Arm for Next Launch…") { [weak self] in self?.presentArmDialog(session: session) }
+        }
+
         ContextMenu.present([
             topSection,
+            [armingItem],
             [.init("Delete Session", destructive: true) { [weak self] in self?.confirmDeleteSession(session) }],
         ], at: anchor, x: x, y: y)
     }
+
+    private func isArmed(_ session: LumaCore.ProcessSession) -> Bool {
+        if case .armed = session.armingState { return true }
+        return false
+    }
+
+    private func disarm(sessionID: UUID) {
+        guard let engine else { return }
+        Task { @MainActor in
+            await engine.disarmSession(id: sessionID)
+        }
+    }
+
+    func presentArmDialog(session: LumaCore.ProcessSession) {
+        guard let engine else { return }
+        let initialPattern = engine.defaultArmPattern(for: session)
+
+        let dialog = Adw.Dialog()
+        dialog.set(title: "Arm for Next Launch")
+        dialog.set(contentWidth: 480)
+
+        let headerBar = Adw.HeaderBar()
+        let armActionButton = Button(label: "Arm")
+        armActionButton.add(cssClass: "suggested-action")
+        headerBar.packEnd(child: armActionButton)
+
+        let body = Box(orientation: .vertical, spacing: 8)
+        body.marginStart = 16
+        body.marginEnd = 16
+        body.marginTop = 12
+        body.marginBottom = 12
+
+        let intro = Label(str: "Match the next spawn whose identifier matches this regex on \(session.deviceName).")
+        intro.halign = .start
+        intro.add(cssClass: "dim-label")
+        intro.wrap = true
+        body.append(child: intro)
+
+        let regexEntry = Entry()
+        regexEntry.text = initialPattern
+        regexEntry.hexpand = true
+        body.append(child: regexEntry)
+
+        let toolbarView = Adw.ToolbarView()
+        toolbarView.addTopBar(widget: headerBar)
+        toolbarView.set(content: body)
+        dialog.set(child: toolbarView)
+
+        let dialogKey = ObjectIdentifier(dialog)
+        MainWindow.armDialogRetainer[dialogKey] = dialog
+        dialog.onClosed { _ in
+            MainActor.assumeIsolated {
+                MainWindow.armDialogRetainer[dialogKey] = nil
+            }
+        }
+
+        let sessionID = session.id
+        armActionButton.onClicked { [weak self, weak dialog, regexEntry] _ in
+            MainActor.assumeIsolated {
+                let pattern = regexEntry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !pattern.isEmpty else { return }
+                Task { @MainActor in
+                    await self?.engine?.armSession(id: sessionID, matchPattern: pattern)
+                }
+                _ = dialog?.close()
+            }
+        }
+
+        dialog.present(parent: window)
+    }
+
+    private static var armDialogRetainer: [ObjectIdentifier: Adw.Dialog] = [:]
 
     private func rehost(sessionID: UUID) {
         guard let engine else { return }

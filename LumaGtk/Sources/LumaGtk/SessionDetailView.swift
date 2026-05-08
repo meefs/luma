@@ -9,6 +9,7 @@ final class SessionDetailView {
     let widget: Box
 
     var onReestablish: (() -> Void)?
+    var onArmRequested: (() -> Void)?
 
     private weak var engine: Engine?
     private let sessionID: UUID
@@ -235,11 +236,27 @@ final class SessionDetailView {
             currentBanner = nil
         }
         guard SessionDetachedBanner.shouldShow(for: session) else { return }
-        let banner = SessionDetachedBanner.make(for: session) { [weak self] in
-            self?.onReestablish?()
-        }
+        let gatingActive = engine?.isGatingActive(forDeviceID: session.deviceID) ?? false
+        let banner = SessionDetachedBanner.make(
+            for: session,
+            gatingActive: gatingActive,
+            onReattach: { [weak self] in self?.onReestablish?() },
+            onDisarm: { [weak self] in self?.disarmSession(session.id) },
+            onArm: { [weak self] in self?.onArmRequested?() },
+            onResumeGating: { [weak self] in self?.resumeGating(for: session.id) }
+        )
         bannerSlot.append(child: banner)
         currentBanner = banner
+    }
+
+    private func disarmSession(_ id: UUID) {
+        guard let engine else { return }
+        Task { @MainActor in await engine.disarmSession(id: id) }
+    }
+
+    private func resumeGating(for id: UUID) {
+        guard let engine else { return }
+        Task { @MainActor in await engine.resumeGating(forSessionID: id) }
     }
 
     private func observeNode() {

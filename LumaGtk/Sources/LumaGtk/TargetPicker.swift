@@ -12,11 +12,13 @@ final class TargetPicker {
 
     typealias OnAttach = (_ device: Frida.Device, _ process: ProcessDetails) -> Void
     typealias OnSpawn = (_ device: Frida.Device, _ config: SpawnConfig) -> Void
+    typealias OnArm = (_ device: Frida.Device, _ config: SpawnConfig, _ regex: String) -> Void
 
     private let parent: Gtk.Window
     private let engine: Engine
     private let onAttach: OnAttach
     private let onSpawn: OnSpawn
+    private let onArm: OnArm
     private let reason: String?
 
     private let dialog: Adw.Dialog
@@ -33,9 +35,11 @@ final class TargetPicker {
     private let processSearchEntry: SearchEntry
     private let attachButton: Button
     private let spawnButton: Button
+    private let armButton: Button
 
     private let attachToggle: ToggleButton
     private let spawnToggle: ToggleButton
+    private let armToggle: ToggleButton
 
     private let modeStack: Box
     private let modeHint: Label
@@ -66,11 +70,22 @@ final class TargetPicker {
     private let appFormBox: Box
     private let programFormBox: Box
 
+    private let armPane: Box
+    private let armRegexEntry: Entry
+    private let armDisplayNameEntry: Entry
+    private let armAutoResumeSwitch: Switch
+    private let armBrowseButton: Button
+    private let armSuggestionsSearchEntry: SearchEntry
+    private let armSuggestionsList: ListBox
+    private let armSuggestionsStatus: Label
+    private let armSuggestionsPopover: Popover
+
     private var devices: [Frida.Device] = []
     private var processes: [ProcessDetails] = []
     private var filteredProcesses: [ProcessDetails] = []
     private var applications: [ApplicationDetails] = []
     private var filteredApplications: [ApplicationDetails] = []
+    private var armSuggestionCandidates: [ApplicationDetails] = []
     private var snapshotTask: Task<Void, Never>?
     private var processFetchTask: Task<Void, Never>?
     private var appFetchTask: Task<Void, Never>?
@@ -87,6 +102,7 @@ final class TargetPicker {
     enum Mode: String {
         case attach
         case spawn
+        case armForLaunch
     }
 
     enum SpawnSubmode: String {
@@ -99,13 +115,15 @@ final class TargetPicker {
         engine: Engine,
         reason: String? = nil,
         onAttach: @escaping OnAttach,
-        onSpawn: @escaping OnSpawn
+        onSpawn: @escaping OnSpawn,
+        onArm: @escaping OnArm
     ) {
         self.parent = parent
         self.engine = engine
         self.reason = reason
         self.onAttach = onAttach
         self.onSpawn = onSpawn
+        self.onArm = onArm
 
         self.pickerState = (try? engine.store.fetchTargetPickerState()) ?? TargetPickerState()
         if let raw = pickerState.lastModeRaw, let m = Mode(rawValue: raw) {
@@ -135,11 +153,14 @@ final class TargetPicker {
         processSearchEntry = SearchEntry()
         attachButton = Button(label: "Attach")
         spawnButton = Button(label: "Spawn & Attach")
+        armButton = Button(label: "Arm for Launch")
 
         attachToggle = ToggleButton()
         attachToggle.label = "Attach"
         spawnToggle = ToggleButton()
         spawnToggle.label = "Spawn"
+        armToggle = ToggleButton()
+        armToggle.label = "Wait for Launch"
         modeHint = Label(str: "")
 
         submodeAppToggle = ToggleButton()
@@ -180,6 +201,26 @@ final class TargetPicker {
         appFormBox = Box(orientation: .vertical, spacing: 0)
         programFormBox = Box(orientation: .vertical, spacing: 0)
 
+        armPane = Box(orientation: .vertical, spacing: 0)
+        armRegexEntry = Entry()
+        armRegexEntry.placeholderText = "Identifier regex"
+        armRegexEntry.hexpand = true
+        armDisplayNameEntry = Entry()
+        armDisplayNameEntry.placeholderText = "Display name"
+        armDisplayNameEntry.hexpand = true
+        armAutoResumeSwitch = Switch()
+        armAutoResumeSwitch.active = true
+        armSuggestionsSearchEntry = SearchEntry()
+        armSuggestionsSearchEntry.placeholderText = "Filter by name or identifier"
+        armSuggestionsList = ListBox()
+        armSuggestionsList.selectionMode = .single
+        armSuggestionsStatus = Label(str: "Select a device to see launchable applications…")
+        armBrowseButton = Button()
+        armBrowseButton.set(iconName: "system-search-symbolic")
+        armBrowseButton.tooltipText = "Browse running applications"
+        armSuggestionsPopover = Popover()
+        armSuggestionsPopover.autohide = true
+
         deviceList.selectionMode = .single
         deviceList.add(cssClass: "navigation-sidebar")
         processList.selectionMode = .single
@@ -196,13 +237,20 @@ final class TargetPicker {
         spawnButton.onClicked { [weak self] _ in
             MainActor.assumeIsolated { self?.commitSpawn() }
         }
+        armButton.add(cssClass: "suggested-action")
+        armButton.onClicked { [weak self] _ in
+            MainActor.assumeIsolated { self?.commitArm() }
+        }
         header.packEnd(child: attachButton)
         header.packEnd(child: spawnButton)
+        header.packEnd(child: armButton)
 
         let modeToggles = Box(orientation: .horizontal, spacing: 0)
         modeToggles.add(cssClass: "linked")
         spawnToggle.set(group: ToggleButtonRef(attachToggle.toggle_button_ptr))
+        armToggle.set(group: ToggleButtonRef(attachToggle.toggle_button_ptr))
         modeToggles.append(child: spawnToggle)
+        modeToggles.append(child: armToggle)
         modeToggles.append(child: attachToggle)
 
         modeHint.add(cssClass: "caption")
@@ -228,12 +276,14 @@ final class TargetPicker {
 
         attachPane.append(child: buildProcessPane())
         spawnPane.append(child: buildSpawnPane())
+        armPane.append(child: buildArmPane())
         noDevicePane.append(child: buildNoDevicePane())
 
         modeStack.hexpand = true
         modeStack.vexpand = true
         modeStack.append(child: attachPane)
         modeStack.append(child: spawnPane)
+        modeStack.append(child: armPane)
         modeStack.append(child: noDevicePane)
 
         let rightPane = Box(orientation: .vertical, spacing: 0)
@@ -298,6 +348,27 @@ final class TargetPicker {
                 self?.setMode(.spawn)
             }
         }
+        armToggle.onToggled { [weak self] btn in
+            MainActor.assumeIsolated {
+                guard btn.active else { return }
+                self?.setMode(.armForLaunch)
+            }
+        }
+        armRegexEntry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSpawnButtonSensitivity() }
+        }
+        armDisplayNameEntry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSpawnButtonSensitivity() }
+        }
+        armBrowseButton.onClicked { [weak self] _ in
+            MainActor.assumeIsolated { self?.presentArmSuggestionsPopover() }
+        }
+        armSuggestionsSearchEntry.onSearchChanged { [weak self] entry in
+            MainActor.assumeIsolated { self?.applyArmSuggestionsFilter(query: entry.text) }
+        }
+        armSuggestionsList.onRowSelected { [weak self] _, row in
+            MainActor.assumeIsolated { self?.handleArmSuggestionRow(row) }
+        }
         submodeProgramToggle.set(group: ToggleButtonRef(submodeAppToggle.toggle_button_ptr))
         submodeAppToggle.onToggled { [weak self] btn in
             MainActor.assumeIsolated {
@@ -328,14 +399,15 @@ final class TargetPicker {
         dialog.onClosed { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.persistState()
+                self?.armSuggestionsPopover.unparent()
                 TargetPicker.retained[key] = nil
             }
         }
 
-        if mode == .attach {
-            attachToggle.active = true
-        } else {
-            spawnToggle.active = true
+        switch mode {
+        case .attach: attachToggle.active = true
+        case .spawn: spawnToggle.active = true
+        case .armForLaunch: armToggle.active = true
         }
         if spawnSubmode == .application {
             submodeAppToggle.active = true
@@ -621,6 +693,110 @@ final class TargetPicker {
         return column
     }
 
+    private func buildArmPane() -> Box {
+        let column = Box(orientation: .vertical, spacing: 0)
+        column.hexpand = true
+        column.vexpand = true
+
+        let formBox = Box(orientation: .vertical, spacing: 8)
+        formBox.marginStart = 12
+        formBox.marginEnd = 12
+        formBox.marginTop = 12
+        formBox.marginBottom = 12
+
+        formBox.append(child: armSectionHeader("Capture Rule"))
+        let regexRow = Box(orientation: .horizontal, spacing: 6)
+        regexRow.append(child: armRegexEntry)
+        armBrowseButton.valign = .center
+        regexRow.append(child: armBrowseButton)
+        formBox.append(child: armLabeledRow("Identifier regex", control: regexRow))
+        formBox.append(child: armLabeledRow("Display name", control: armDisplayNameEntry))
+        formBox.append(child: armCaption("Match the regex against each new spawn's identifier on this device. Display name is shown in the sidebar."))
+
+        formBox.append(child: armSectionHeader("On Capture"))
+        let resumeRow = Box(orientation: .horizontal, spacing: 8)
+        let resumeLabel = Label(str: "Automatically resume on capture")
+        resumeLabel.halign = .start
+        resumeLabel.hexpand = true
+        resumeRow.append(child: resumeLabel)
+        armAutoResumeSwitch.valign = .center
+        resumeRow.append(child: armAutoResumeSwitch)
+        formBox.append(child: resumeRow)
+        formBox.append(child: armCaption("When off, the captured process is held paused so you can attach instruments before it runs."))
+
+        column.append(child: formBox)
+        armSuggestionsPopover.set(child: buildArmSuggestionsPopoverContent())
+        return column
+    }
+
+    private func buildArmSuggestionsPopoverContent() -> Box {
+        let content = Box(orientation: .vertical, spacing: 0)
+        content.setSizeRequest(width: 360, height: 400)
+
+        armSuggestionsSearchEntry.placeholderText = "Filter by name or identifier"
+        armSuggestionsSearchEntry.hexpand = true
+        armSuggestionsSearchEntry.marginStart = 12
+        armSuggestionsSearchEntry.marginEnd = 12
+        armSuggestionsSearchEntry.marginTop = 12
+        armSuggestionsSearchEntry.marginBottom = 6
+        content.append(child: armSuggestionsSearchEntry)
+        content.append(child: Separator(orientation: .horizontal))
+
+        armSuggestionsStatus.halign = .center
+        armSuggestionsStatus.marginStart = 12
+        armSuggestionsStatus.marginEnd = 12
+        armSuggestionsStatus.marginTop = 12
+        armSuggestionsStatus.marginBottom = 12
+        armSuggestionsStatus.add(cssClass: "caption")
+        armSuggestionsStatus.add(cssClass: "dim-label")
+        armSuggestionsStatus.wrap = true
+        content.append(child: armSuggestionsStatus)
+
+        let scroll = ScrolledWindow()
+        scroll.hexpand = true
+        scroll.vexpand = true
+        scroll.set(child: armSuggestionsList)
+        content.append(child: scroll)
+
+        return content
+    }
+
+    private func presentArmSuggestionsPopover() {
+        if let device = currentDevice() {
+            loadApplications(for: device)
+        }
+        armSuggestionsPopover.unparent()
+        armSuggestionsPopover.set(parent: WidgetRef(armBrowseButton))
+        armSuggestionsPopover.popup()
+    }
+
+    private func armSectionHeader(_ text: String) -> Label {
+        let label = Label(str: text)
+        label.add(cssClass: "heading")
+        label.halign = .start
+        return label
+    }
+
+    private func armLabeledRow<W: WidgetProtocol>(_ caption: String, control: W) -> Box {
+        let row = Box(orientation: .vertical, spacing: 2)
+        let label = Label(str: caption)
+        label.halign = .start
+        label.add(cssClass: "caption")
+        label.add(cssClass: "dim-label")
+        row.append(child: label)
+        row.append(child: control)
+        return row
+    }
+
+    private func armCaption(_ text: String) -> Label {
+        let label = Label(str: text)
+        label.add(cssClass: "caption")
+        label.add(cssClass: "dim-label")
+        label.halign = .start
+        label.wrap = true
+        return label
+    }
+
     private func buildSpawnSubmodeSections(for form: SpawnSubmodeForm, isAppMode: Bool) -> Box {
         let container = Box(orientation: .vertical, spacing: 0)
         container.marginStart = 12
@@ -811,16 +987,24 @@ final class TargetPicker {
         let hasDevice = currentDevice() != nil
         attachPane.visible = hasDevice && (mode == .attach)
         spawnPane.visible = hasDevice && (mode == .spawn)
+        armPane.visible = hasDevice && (mode == .armForLaunch)
         noDevicePane.visible = !hasDevice
         attachButton.visible = (mode == .attach)
         spawnButton.visible = (mode == .spawn)
-        modeHint.label = mode == .spawn
-            ? "Spawn a new app or program under Luma."
-            : "Attach to an already-running process on this device."
-        if mode == .spawn, let device = currentDevice() {
+        armButton.visible = (mode == .armForLaunch)
+        modeHint.label = modeHintText
+        if (mode == .spawn || mode == .armForLaunch), let device = currentDevice() {
             loadApplications(for: device)
         }
         refreshSpawnButtonSensitivity()
+    }
+
+    private var modeHintText: String {
+        switch mode {
+        case .spawn: return "Spawn a new app or program under Luma."
+        case .armForLaunch: return "Capture the next launch matching your rule."
+        case .attach: return "Attach to an already-running process on this device."
+        }
     }
 
     private func setSpawnSubmode(_ sub: SpawnSubmode) {
@@ -837,21 +1021,24 @@ final class TargetPicker {
     }
 
     private func refreshSpawnButtonSensitivity() {
-        guard mode == .spawn else {
-            spawnButton.sensitive = false
-            return
-        }
         guard currentDevice() != nil else {
             spawnButton.sensitive = false
+            armButton.sensitive = false
             return
         }
+        let hasSpawnTarget: Bool
         switch spawnSubmode {
         case .application:
-            spawnButton.sensitive = (selectedApplicationIdentifier != nil)
+            hasSpawnTarget = (selectedApplicationIdentifier != nil)
         case .program:
-            spawnButton.sensitive = !programPathEntry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            hasSpawnTarget = !programPathEntry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        spawnButton.sensitive = (mode == .spawn) && hasSpawnTarget
+        let hasArmRegex = !armRegexEntry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasArmName = !armDisplayNameEntry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        armButton.sensitive = (mode == .armForLaunch) && hasArmRegex && hasArmName
     }
+
 
     // MARK: - Devices
 
@@ -1091,6 +1278,7 @@ final class TargetPicker {
         applications = sorted
         appStatus.visible = false
         applyAppFilter(query: appSearchEntry.text)
+        applyArmSuggestionsFilter(query: armSuggestionsSearchEntry.text)
 
         if let saved = selectedApplicationIdentifier ?? pickerState.lastSpawnApplicationID,
             let idx = filteredApplications.firstIndex(where: { $0.identifier == saved }),
@@ -1098,6 +1286,63 @@ final class TargetPicker {
         {
             appList.select(row: row)
         }
+    }
+
+    private func applyArmSuggestionsFilter(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        let filtered: [ApplicationDetails] = trimmed.isEmpty
+            ? applications
+            : applications.filter {
+                $0.name.localizedCaseInsensitiveContains(trimmed)
+                    || $0.identifier.localizedCaseInsensitiveContains(trimmed)
+            }
+        armSuggestionsList.removeAll()
+        armSuggestionCandidates = filtered
+        if filtered.isEmpty {
+            armSuggestionsStatus.label = applications.isEmpty
+                ? "No applications enumerated. Type a regex above to match by identifier."
+                : "No applications match the filter."
+            armSuggestionsStatus.visible = true
+        } else {
+            armSuggestionsStatus.visible = false
+            for app in filtered {
+                armSuggestionsList.append(child: makeArmSuggestionRow(app))
+            }
+        }
+    }
+
+    private func makeArmSuggestionRow(_ app: ApplicationDetails) -> ListBoxRow {
+        let row = ListBoxRow()
+        let hbox = Box(orientation: .horizontal, spacing: 8)
+        hbox.marginStart = 12
+        hbox.marginEnd = 12
+        hbox.marginTop = 4
+        hbox.marginBottom = 4
+        if let fridaIcon = app.icons.last, let img = IconPixbuf.makeImage(from: fridaIcon, pixelSize: 20) {
+            hbox.append(child: img)
+        } else {
+            hbox.append(child: IconPlaceholderView.make(
+                seed: app.identifier,
+                displayName: app.name,
+                pixelSize: 20
+            ))
+        }
+        let textBox = Box(orientation: .vertical, spacing: 0)
+        textBox.hexpand = true
+        textBox.valign = .center
+        let nameLabel = Label(str: app.name)
+        nameLabel.halign = .start
+        nameLabel.ellipsize = EllipsizeMode.end
+        let idLabel = Label(str: app.identifier)
+        idLabel.halign = .start
+        idLabel.ellipsize = EllipsizeMode.end
+        idLabel.add(cssClass: "dim-label")
+        idLabel.add(cssClass: "caption")
+        textBox.append(child: nameLabel)
+        textBox.append(child: idLabel)
+        hbox.append(child: textBox)
+        row.set(child: hbox)
+        return row
     }
 
     private func applyAppFilter(query: String) {
@@ -1165,6 +1410,21 @@ final class TargetPicker {
         refreshSpawnButtonSensitivity()
     }
 
+    private func handleArmSuggestionRow(_ row: ListBoxRowRef?) {
+        guard let row else { return }
+        let index = Int(row.index)
+        guard index >= 0, index < armSuggestionCandidates.count else { return }
+        applyArmSuggestion(armSuggestionCandidates[index])
+        armSuggestionsList.unselectAll()
+        armSuggestionsPopover.popdown()
+    }
+
+    private func applyArmSuggestion(_ app: ApplicationDetails) {
+        armRegexEntry.text = "^" + NSRegularExpression.escapedPattern(for: app.identifier) + "$"
+        armDisplayNameEntry.text = app.name
+        refreshSpawnButtonSensitivity()
+    }
+
     // MARK: - Commit
 
     private func commitAttach() {
@@ -1183,23 +1443,67 @@ final class TargetPicker {
     }
 
     private func commitSpawn() {
+        guard let device = currentDevice(), let config = currentSpawnConfig() else { return }
+        persistState()
+        onSpawn(device, config)
+        cancelLoadingTasks()
+        _ = dialog.close()
+    }
+
+    private func commitArm() {
         guard let device = currentDevice() else { return }
+        let pattern = armRegexEntry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pattern.isEmpty else { return }
+        let displayName = resolvedArmDisplayName(forPattern: pattern)
+        let config = SpawnConfig(
+            target: .application(identifier: armTargetIdentifier(forPattern: pattern), name: displayName),
+            arguments: [],
+            environment: [:],
+            workingDirectory: nil,
+            stdio: .pipe,
+            autoResume: armAutoResumeSwitch.active
+        )
+        persistState()
+        onArm(device, config, pattern)
+        cancelLoadingTasks()
+        _ = dialog.close()
+    }
+
+    private func resolvedArmDisplayName(forPattern pattern: String) -> String {
+        let trimmed = armDisplayNameEntry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return literalFromAnchoredPattern(pattern) ?? pattern
+    }
+
+    private func armTargetIdentifier(forPattern pattern: String) -> String {
+        literalFromAnchoredPattern(pattern) ?? pattern
+    }
+
+    private func literalFromAnchoredPattern(_ pattern: String) -> String? {
+        var trimmed = pattern
+        if trimmed.hasPrefix("^") { trimmed.removeFirst() }
+        if trimmed.hasSuffix("$") { trimmed.removeLast() }
+        let metacharacters: Set<Character> = ["\\", ".", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|"]
+        return trimmed.contains(where: { metacharacters.contains($0) }) ? nil : trimmed
+    }
+
+    private func currentSpawnConfig() -> SpawnConfig? {
         let target: SpawnConfig.Target
         let form: SpawnSubmodeForm
         switch spawnSubmode {
         case .application:
             guard let identifier = selectedApplicationIdentifier,
                 let app = applications.first(where: { $0.identifier == identifier })
-            else { return }
+            else { return nil }
             target = .application(identifier: app.identifier, name: app.name)
             form = appSubmodeForm
         case .program:
             let path = programPathEntry.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !path.isEmpty else { return }
+            guard !path.isEmpty else { return nil }
             target = .program(path: path)
             form = programSubmodeForm
         }
-        let config = SpawnConfig(
+        return SpawnConfig(
             target: target,
             arguments: form.arguments(),
             environment: form.environment(),
@@ -1207,12 +1511,12 @@ final class TargetPicker {
             stdio: form.stdio(),
             autoResume: form.autoResume()
         )
-        persistState()
-        onSpawn(device, config)
+    }
+
+    private func cancelLoadingTasks() {
         snapshotTask?.cancel()
         processFetchTask?.cancel()
         appFetchTask?.cancel()
-        _ = dialog.close()
     }
 
     // MARK: - Add Remote sheet

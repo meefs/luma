@@ -16,6 +16,8 @@ final class REPLPane {
     private var currentBanner: Widget?
     private var lastBannerPhase: LumaCore.ProcessSession.Phase?
     private var lastBannerError: String?
+    private var lastBannerGatingActive: Bool?
+    private var lastBannerArmed: Bool?
     private let cellsBox: Box
     private let cellsScroll: ScrolledWindow
     private let inputEntry: Entry
@@ -147,19 +149,31 @@ final class REPLPane {
         runButton.sensitive = canType
         if let driver = engine.driver(forSessionID: sessionID), !localIsDriver {
             inputEntry.placeholderText = "Driving: @\(driver.id)"
+        } else if isAttached {
+            inputEntry.placeholderText = "Enter JavaScript\u{2026}"
+        } else if let session {
+            inputEntry.placeholderText = inactiveMessage(for: session)
         } else {
-            inputEntry.placeholderText =
-                isAttached
-                ? "Enter JavaScript\u{2026}"
-                : "Session detached — re-establish to continue."
+            inputEntry.placeholderText = "Session not attached."
         }
 
         let wantsBanner = session.map { SessionDetachedBanner.shouldShow(for: $0) } ?? false
         let phase = session?.phase
         let error = session?.lastError
-        let bannerDirty = wantsBanner != (currentBanner != nil) || phase != lastBannerPhase || error != lastBannerError
+        let armed: Bool? = session.map {
+            if case .armed = $0.armingState { return true }
+            return false
+        }
+        let gatingActive: Bool? = session.map { engine.isGatingActive(forDeviceID: $0.deviceID) }
+        let bannerDirty = wantsBanner != (currentBanner != nil)
+            || phase != lastBannerPhase
+            || error != lastBannerError
+            || armed != lastBannerArmed
+            || gatingActive != lastBannerGatingActive
         lastBannerPhase = phase
         lastBannerError = error
+        lastBannerArmed = armed
+        lastBannerGatingActive = gatingActive
 
         if bannerDirty {
             if let rootPtr = widget.root?.ptr {
@@ -170,13 +184,36 @@ final class REPLPane {
                 currentBanner = nil
             }
             if let session, wantsBanner {
-                let banner = SessionDetachedBanner.make(for: session) { [weak self] in
-                    self?.owner?.reestablishSession(id: session.id)
-                }
+                let gatingActive = engine.isGatingActive(forDeviceID: session.deviceID)
+                let banner = SessionDetachedBanner.make(
+                    for: session,
+                    gatingActive: gatingActive,
+                    onReattach: { [weak self] in self?.owner?.reestablishSession(id: session.id) },
+                    onDisarm: { [weak engine] in
+                        Task { @MainActor in await engine?.disarmSession(id: session.id) }
+                    },
+                    onArm: { [weak self] in self?.owner?.presentArmDialog(session: session) },
+                    onResumeGating: { [weak engine] in
+                        Task { @MainActor in await engine?.resumeGating(forSessionID: session.id) }
+                    }
+                )
                 bannerSlot.append(child: banner)
                 currentBanner = banner
             }
         }
+    }
+
+    private func inactiveMessage(for session: LumaCore.ProcessSession) -> String {
+        if case .armed = session.armingState {
+            if engine?.isGatingActive(forDeviceID: session.deviceID) == true {
+                return "Waiting for a matching launch — REPL available once captured."
+            }
+            return "Armed but inactive — resume spawn gating to capture launches."
+        }
+        if session.lastAttachedAt != nil {
+            return "Session detached — use \(session.kind.reestablishLabel) to continue."
+        }
+        return "Session not attached — arm it from the banner above."
     }
 
     private func loadCells() {

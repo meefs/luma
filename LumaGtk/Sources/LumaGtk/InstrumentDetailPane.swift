@@ -45,9 +45,19 @@ final class InstrumentDetailPane {
         guard let session = engine.sessions.first(where: { $0.id == sessionID }) else { return }
 
         if SessionDetachedBanner.shouldShow(for: session) {
-            let banner = SessionDetachedBanner.make(for: session) { [weak self] in
-                self?.owner?.reestablishSession(id: session.id)
-            }
+            let gatingActive = engine.isGatingActive(forDeviceID: session.deviceID)
+            let banner = SessionDetachedBanner.make(
+                for: session,
+                gatingActive: gatingActive,
+                onReattach: { [weak self] in self?.owner?.reestablishSession(id: session.id) },
+                onDisarm: { [weak engine] in
+                    Task { @MainActor in await engine?.disarmSession(id: session.id) }
+                },
+                onArm: { [weak self] in self?.owner?.presentArmDialog(session: session) },
+                onResumeGating: { [weak engine] in
+                    Task { @MainActor in await engine?.resumeGating(forSessionID: session.id) }
+                }
+            )
             if let existing = currentBanner {
                 bannerSlot.remove(child: existing)
             }

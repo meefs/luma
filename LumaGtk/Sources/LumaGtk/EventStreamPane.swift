@@ -728,6 +728,9 @@ final class EventStreamPane {
             let name = instrument(for: event)
                 .map { engine?.descriptor(for: $0).displayName ?? "Instrument" } ?? "Instrument"
             return "\(name) • \(process)"
+        case .spawnGating(_, let deviceName, _, _, let outcome):
+            let label = outcome == .captured ? "Spawn Captured" : "Spawn Released"
+            return "\(deviceName) • \(label)"
         }
     }
 
@@ -747,6 +750,8 @@ final class EventStreamPane {
                 return engine.descriptor(for: instance).displayName
             }
             return "Instrument"
+        case .spawnGating(_, _, _, _, let outcome):
+            return outcome == .captured ? "spawn-captured" : "spawn-released"
         }
     }
 
@@ -1002,6 +1007,8 @@ final class EventStreamPane {
         case .console: title = "Console (\(process))"
         case .repl: title = "REPL (\(process))"
         case .instrument(_, let name): title = "Instrument \(name)"
+        case .spawnGating(_, _, _, _, let outcome):
+            title = outcome == .captured ? "Spawn Captured" : "Spawn Released"
         }
 
         var jsValue: JSInspectValue? = nil
@@ -1212,6 +1219,9 @@ final class EventStreamPane {
                 name = "Instrument"
             }
             return "\(name)\(processSuffix)"
+        case .spawnGating(_, let deviceName, _, _, let outcome):
+            let label = outcome == .captured ? "captured" : "released"
+            return "spawn \(label) · \(deviceName)"
         }
     }
 
@@ -1259,6 +1269,7 @@ private enum EventSourceFilter: String, CaseIterable, Hashable {
     case console
     case repl
     case instrument
+    case spawnGating
 
     var menuTitle: String {
         switch self {
@@ -1267,6 +1278,7 @@ private enum EventSourceFilter: String, CaseIterable, Hashable {
         case .console: return "Console"
         case .repl: return "REPL"
         case .instrument: return "Instruments"
+        case .spawnGating: return "Spawn Gating"
         }
     }
 
@@ -1277,6 +1289,7 @@ private enum EventSourceFilter: String, CaseIterable, Hashable {
         case .console: return .console
         case .repl: return .repl
         case .instrument: return .instrument
+        case .spawnGating: return .spawnGating
         }
     }
 }

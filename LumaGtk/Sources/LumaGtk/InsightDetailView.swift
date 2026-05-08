@@ -174,9 +174,19 @@ final class InsightDetailView {
             currentBanner = nil
         }
         if SessionDetachedBanner.shouldShow(for: current) {
-            let banner = SessionDetachedBanner.make(for: current) { [weak self] in
-                self?.owner?.reestablishSession(id: current.id)
-            }
+            let gatingActive = engine.isGatingActive(forDeviceID: current.deviceID)
+            let banner = SessionDetachedBanner.make(
+                for: current,
+                gatingActive: gatingActive,
+                onReattach: { [weak self] in self?.owner?.reestablishSession(id: current.id) },
+                onDisarm: { [weak engine] in
+                    Task { @MainActor in await engine?.disarmSession(id: current.id) }
+                },
+                onArm: { [weak self] in self?.owner?.presentArmDialog(session: current) },
+                onResumeGating: { [weak engine] in
+                    Task { @MainActor in await engine?.resumeGating(forSessionID: current.id) }
+                }
+            )
             bannerSlot.append(child: banner)
             currentBanner = banner
         }
