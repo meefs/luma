@@ -97,8 +97,7 @@ public final class MCPServer {
         if method != "POST" {
             return HTTPResponse(status: 405, body: Data("Method Not Allowed".utf8), contentType: "text/plain")
         }
-        let presented = headers["authorization"] ?? ""
-        if presented != "Bearer \(bearerToken)" {
+        if !checkBearer(headers["authorization"]) {
             return HTTPResponse(status: 401, body: Data("Unauthorized".utf8), contentType: "text/plain")
         }
         guard let request = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
@@ -287,6 +286,13 @@ public final class MCPServer {
         return nil
     }
 
+    private func checkBearer(_ presented: String?) -> Bool {
+        guard let presented else { return false }
+        let parts = presented.split(separator: " ", maxSplits: 1).map(String.init)
+        guard parts.count == 2, parts[0].lowercased() == "bearer" else { return false }
+        return parts[1] == bearerToken
+    }
+
     // MARK: - Network impl (Apple)
 
     #if canImport(Network)
@@ -357,7 +363,7 @@ public final class MCPServer {
                     body: parsed.body
                 )
                 let bytes = encodeHTTPResponse(response)
-                conn.send(content: bytes, completion: .contentProcessed { _ in
+                conn.send(content: bytes, isComplete: true, completion: .contentProcessed { _ in
                     conn.cancel()
                 })
             }
