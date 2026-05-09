@@ -2,6 +2,24 @@
 
 import PackageDescription
 
+#if !canImport(Darwin)
+let cSoupTargets: [Target] = [
+    .systemLibrary(
+        name: "CSoup",
+        path: "Sources/CSoup",
+        pkgConfig: "libsoup-3.0",
+        providers: [
+            .apt(["libsoup-3.0-dev"]),
+            .yum(["libsoup3-devel"]),
+        ]
+    )
+]
+let lumaCoreSoupDeps: [Target.Dependency] = ["CSoup"]
+#else
+let cSoupTargets: [Target] = []
+let lumaCoreSoupDeps: [Target.Dependency] = []
+#endif
+
 let package = Package(
     name: "luma",
     platforms: [
@@ -19,7 +37,7 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift", .upToNextMajor(from: "7.0.0")),
         .package(url: "https://github.com/radareorg/SwiftyR2", branch: "main"),
     ],
-    targets: [
+    targets: cSoupTargets + [
         .target(
             name: "LumaCore",
             dependencies: [
@@ -27,7 +45,7 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "SwiftyR2", package: "SwiftyR2"),
-            ],
+            ] + lumaCoreSoupDeps,
             path: "Sources/LumaCore",
             resources: [
                 .process("Resources"),

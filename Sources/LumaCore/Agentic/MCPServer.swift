@@ -1,26 +1,32 @@
-#if canImport(Network)
 import Foundation
+#if canImport(Network)
 import Network
+#elseif canImport(CSoup)
+import CSoup
+#endif
 
 @MainActor
 public final class MCPServer {
     public typealias ToolCallObserver = @MainActor (String, [String: Any]) -> Void
     public typealias ToolResultObserver = @MainActor (String, ActionResult) -> Void
+    public typealias MissionResolver = @MainActor () async -> Mission?
 
     public var onToolStarted: ToolCallObserver?
     public var onToolFinished: ToolResultObserver?
-
-    private let queue = DispatchQueue(label: "luma.mcp.server")
-    private var listener: NWListener?
-
-    public typealias MissionResolver = @MainActor () async -> Mission?
+    public let bearerToken: String
 
     private weak var engine: Engine?
     private let resolveMission: MissionResolver
     private let toolNames: Set<String>
-    public let bearerToken: String
-
     private var pendingApprovals: [UUID: CheckedContinuation<ApprovalDecision, Never>] = [:]
+
+    #if canImport(Network)
+    private let queue = DispatchQueue(label: "luma.mcp.server")
+    private var listener: NWListener?
+    #elseif canImport(CSoup)
+    private var soupServer: OpaquePointer?
+    private var soupSelfPointer: UnsafeMutableRawPointer?
+    #endif
 
     public init(
         engine: Engine,
@@ -55,94 +61,37 @@ public final class MCPServer {
         }
     }
 
-    private enum ApprovalDecision {
+    fileprivate enum ApprovalDecision {
         case approved
         case rejected(String?)
         case cancelled
     }
 
     public func start(preferredPort: UInt16? = nil) async throws -> URL {
-        if let preferredPort, let endpoint = NWEndpoint.Port(rawValue: preferredPort) {
-            if let url = try? await startListener(on: endpoint) {
-                return url
-            }
-        }
-        return try await startListener(on: .any)
-    }
-
-    private func startListener(on port: NWEndpoint.Port) async throws -> URL {
-        let parameters = NWParameters.tcp
-        parameters.requiredInterfaceType = .loopback
-        parameters.allowLocalEndpointReuse = true
-        let listener = try NWListener(using: parameters, on: port)
-        self.listener = listener
-
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
-            let resumed = ResumeFlag()
-            listener.stateUpdateHandler = { state in
-                guard !resumed.flip() else { return }
-                switch state {
-                case .ready:
-                    guard let port = listener.port else {
-                        cont.resume(throwing: MCPServerError.listenerFailed("no port"))
-                        return
-                    }
-                    cont.resume(returning: URL(string: "http://127.0.0.1:\(port.rawValue)/mcp")!)
-                case .failed(let error):
-                    cont.resume(throwing: error)
-                case .cancelled:
-                    cont.resume(throwing: MCPServerError.listenerFailed("cancelled before ready"))
-                default:
-                    resumed.unflip()
-                }
-            }
-            listener.newConnectionHandler = { [weak self] conn in
-                guard let self else { conn.cancel(); return }
-                self.accept(conn)
-            }
-            listener.start(queue: queue)
-        }
+        #if canImport(Network)
+        return try await startNetwork(preferredPort: preferredPort)
+        #elseif canImport(CSoup)
+        return try await startSoup(preferredPort: preferredPort)
+        #else
+        _ = preferredPort
+        throw MCPServerError.listenerFailed("no HTTP server backend on this platform")
+        #endif
     }
 
     public func stop() {
+        #if canImport(Network)
         listener?.cancel()
         listener = nil
+        #elseif canImport(CSoup)
+        stopSoup()
+        #endif
         for (_, cont) in pendingApprovals {
             cont.resume(returning: .cancelled)
         }
         pendingApprovals.removeAll()
     }
 
-    nonisolated private func accept(_ conn: NWConnection) {
-        conn.start(queue: queue)
-        readRequest(on: conn, accumulated: Data())
-    }
-
-    nonisolated private func readRequest(on conn: NWConnection, accumulated: Data) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, error in
-            guard let self else { conn.cancel(); return }
-            if error != nil { conn.cancel(); return }
-            var buffer = accumulated
-            if let data { buffer.append(data) }
-            guard let parsed = parseHTTPRequest(buffer) else {
-                self.readRequest(on: conn, accumulated: buffer)
-                return
-            }
-
-            Task { @MainActor in
-                let response = await self.dispatch(
-                    method: parsed.method,
-                    path: parsed.path,
-                    headers: parsed.headers,
-                    body: parsed.body
-                )
-                let bytes = encodeHTTPResponse(response)
-                conn.send(content: bytes, completion: .contentProcessed { _ in
-                    conn.cancel()
-                })
-            }
-        }
-    }
+    // MARK: - Shared dispatch
 
     private func dispatch(method: String, path: String, headers: [String: String], body: Data) async -> HTTPResponse {
         if method != "POST" {
@@ -337,6 +286,217 @@ public final class MCPServer {
         if let i = raw as? Int { return String(i) }
         return nil
     }
+
+    // MARK: - Network impl (Apple)
+
+    #if canImport(Network)
+    private func startNetwork(preferredPort: UInt16?) async throws -> URL {
+        if let preferredPort, let endpoint = NWEndpoint.Port(rawValue: preferredPort) {
+            if let url = try? await startListener(on: endpoint) {
+                return url
+            }
+        }
+        return try await startListener(on: .any)
+    }
+
+    private func startListener(on port: NWEndpoint.Port) async throws -> URL {
+        let parameters = NWParameters.tcp
+        parameters.requiredInterfaceType = .loopback
+        parameters.allowLocalEndpointReuse = true
+        let listener = try NWListener(using: parameters, on: port)
+        self.listener = listener
+
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
+            let resumed = ResumeFlag()
+            listener.stateUpdateHandler = { state in
+                guard !resumed.flip() else { return }
+                switch state {
+                case .ready:
+                    guard let port = listener.port else {
+                        cont.resume(throwing: MCPServerError.listenerFailed("no port"))
+                        return
+                    }
+                    cont.resume(returning: URL(string: "http://127.0.0.1:\(port.rawValue)/mcp")!)
+                case .failed(let error):
+                    cont.resume(throwing: error)
+                case .cancelled:
+                    cont.resume(throwing: MCPServerError.listenerFailed("cancelled before ready"))
+                default:
+                    resumed.unflip()
+                }
+            }
+            listener.newConnectionHandler = { [weak self] conn in
+                guard let self else { conn.cancel(); return }
+                self.accept(conn)
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    nonisolated private func accept(_ conn: NWConnection) {
+        conn.start(queue: queue)
+        readRequest(on: conn, accumulated: Data())
+    }
+
+    nonisolated private func readRequest(on conn: NWConnection, accumulated: Data) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, error in
+            guard let self else { conn.cancel(); return }
+            if error != nil { conn.cancel(); return }
+            var buffer = accumulated
+            if let data { buffer.append(data) }
+            guard let parsed = parseHTTPRequest(buffer) else {
+                self.readRequest(on: conn, accumulated: buffer)
+                return
+            }
+
+            Task { @MainActor in
+                let response = await self.dispatch(
+                    method: parsed.method,
+                    path: parsed.path,
+                    headers: parsed.headers,
+                    body: parsed.body
+                )
+                let bytes = encodeHTTPResponse(response)
+                conn.send(content: bytes, completion: .contentProcessed { _ in
+                    conn.cancel()
+                })
+            }
+        }
+    }
+    #endif
+
+    // MARK: - Soup impl (Linux/Windows)
+
+    #if canImport(CSoup)
+    private func startSoup(preferredPort: UInt16?) async throws -> URL {
+        let server = soup_server_new(nil)
+        guard let server else {
+            throw MCPServerError.listenerFailed("soup_server_new returned null")
+        }
+
+        let me = Unmanaged.passRetained(self).toOpaque()
+        soupSelfPointer = me
+
+        soup_server_add_handler(server, "/mcp", { _, msg, _, _, userData in
+            guard let userData, let msg else { return }
+            soup_server_message_pause(msg)
+            let me = Unmanaged<MCPServer>.fromOpaque(userData).takeUnretainedValue()
+            Task { @MainActor in
+                await me.handleSoupRequest(message: msg)
+            }
+        }, me, nil)
+
+        let listenOptions = SoupServerListenOptions(rawValue: 0)
+        var error: UnsafeMutablePointer<GError>?
+        let port = preferredPort.map(Int32.init) ?? 0
+        let success = soup_server_listen_local(server, gint(port), listenOptions, &error)
+        if !success {
+            let message: String
+            if let err = error {
+                message = String(cString: err.pointee.message)
+                g_error_free(err)
+            } else {
+                message = "soup_server_listen_local failed"
+            }
+            g_object_unref(UnsafeMutableRawPointer(server))
+            Unmanaged<MCPServer>.fromOpaque(me).release()
+            soupSelfPointer = nil
+            throw MCPServerError.listenerFailed(message)
+        }
+
+        guard let urisRaw = soup_server_get_uris(server) else {
+            g_object_unref(UnsafeMutableRawPointer(server))
+            Unmanaged<MCPServer>.fromOpaque(me).release()
+            soupSelfPointer = nil
+            throw MCPServerError.listenerFailed("soup_server_get_uris returned null")
+        }
+        let urisList = UnsafeMutablePointer<GSList>(urisRaw)
+        guard let firstUriPtr = urisList.pointee.data else {
+            g_slist_free_full(urisList, { ptr in
+                if let ptr { g_uri_unref(OpaquePointer(ptr)) }
+            })
+            g_object_unref(UnsafeMutableRawPointer(server))
+            Unmanaged<MCPServer>.fromOpaque(me).release()
+            soupSelfPointer = nil
+            throw MCPServerError.listenerFailed("soup_server_get_uris returned empty list")
+        }
+        let firstUri = OpaquePointer(firstUriPtr)
+        let cString = g_uri_to_string(firstUri)
+        defer { g_free(cString) }
+        let urlString = cString.map { String(cString: $0) } ?? ""
+
+        g_slist_free_full(urisList, { ptr in
+            if let ptr { g_uri_unref(OpaquePointer(ptr)) }
+        })
+
+        soupServer = server
+
+        guard var url = URL(string: urlString) else {
+            stopSoup()
+            throw MCPServerError.listenerFailed("invalid URL from libsoup: \(urlString)")
+        }
+        if !url.path.hasSuffix("/mcp") {
+            url.append(path: "mcp")
+        }
+        return url
+    }
+
+    private func stopSoup() {
+        if let server = soupServer {
+            soup_server_disconnect(server)
+            g_object_unref(UnsafeMutableRawPointer(server))
+            soupServer = nil
+        }
+        if let me = soupSelfPointer {
+            Unmanaged<MCPServer>.fromOpaque(me).release()
+            soupSelfPointer = nil
+        }
+    }
+
+    private func handleSoupRequest(message: OpaquePointer) async {
+        let method = soup_server_message_get_method(message).map { String(cString: $0) } ?? ""
+
+        let collector = HeaderCollector()
+        if let reqHeaders = soup_server_message_get_request_headers(message) {
+            let userData = Unmanaged.passUnretained(collector).toOpaque()
+            soup_message_headers_foreach(reqHeaders, { name, value, ud in
+                guard let name, let value, let ud else { return }
+                let collector = Unmanaged<HeaderCollector>.fromOpaque(ud).takeUnretainedValue()
+                let nameStr = String(cString: name).lowercased()
+                let valueStr = String(cString: value)
+                collector.headers[nameStr] = valueStr
+            }, userData)
+        }
+        let headers = collector.headers
+
+        var bodyData = Data()
+        if let body = soup_server_message_get_request_body(message),
+            let bytes = soup_message_body_flatten(body)
+        {
+            var size: gsize = 0
+            if let raw = g_bytes_get_data(bytes, &size), size > 0 {
+                bodyData = Data(bytes: raw, count: Int(size))
+            }
+            g_bytes_unref(bytes)
+        }
+
+        let response = await dispatch(method: method, path: "/mcp", headers: headers, body: bodyData)
+        soup_server_message_set_status(message, gint(response.status), nil)
+        if !response.body.isEmpty {
+            response.body.withUnsafeBytes { ptr in
+                guard let base = ptr.baseAddress else { return }
+                soup_server_message_set_response(
+                    message,
+                    response.contentType,
+                    SOUP_MEMORY_COPY,
+                    base.assumingMemoryBound(to: CChar.self),
+                    gsize(response.body.count)
+                )
+            }
+        }
+        soup_server_message_unpause(message)
+    }
+    #endif
 }
 
 public enum MCPServerError: Error {
@@ -349,6 +509,7 @@ private struct HTTPResponse {
     let contentType: String
 }
 
+#if canImport(Network)
 private struct ParsedRequest {
     let method: String
     let path: String
@@ -420,6 +581,10 @@ private final class ResumeFlag: @unchecked Sendable {
         done = false
     }
 }
-
 #endif
 
+#if canImport(CSoup)
+private final class HeaderCollector {
+    var headers: [String: String] = [:]
+}
+#endif
