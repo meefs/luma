@@ -22,7 +22,7 @@ struct SidebarView: View {
                 SidebarMissionsRow(count: missions.count)
                     .tag(SidebarItemID.missions)
                 ForEach(missions) { mission in
-                    SidebarMissionRow(mission: mission)
+                    SidebarMissionRow(mission: mission, workspace: workspace, selection: $selection)
                         .tag(SidebarItemID.mission(mission.id))
                 }
             }
@@ -138,6 +138,10 @@ private struct SidebarMissionsRow: View {
 
 private struct SidebarMissionRow: View {
     let mission: LumaCore.Mission
+    @ObservedObject var workspace: Workspace
+    @Binding var selection: SidebarItemID?
+
+    @State private var isShowingDeleteConfirmation = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -152,6 +156,30 @@ private struct SidebarMissionRow: View {
         .padding(.leading, subrowIconWidth)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("sidebar.mission.\(mission.id.uuidString)")
+        .contextMenu {
+            Button(role: .destructive) {
+                isShowingDeleteConfirmation = true
+            } label: {
+                Label("Delete Mission", systemImage: "trash")
+            }
+        }
+        .confirmationDialog(
+            "Delete Mission?",
+            isPresented: $isShowingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Mission", role: .destructive) { deleteMission() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove the mission and all of its turns, tool calls, and findings.")
+        }
+    }
+
+    private func deleteMission() {
+        if selection == .mission(mission.id) {
+            selection = .missions
+        }
+        workspace.engine.deleteMission(missionID: mission.id)
     }
 
     private var iconName: String {
