@@ -20,6 +20,10 @@ public final class Engine {
     private let missionExecutor: MissionExecutor
     private var activeMCPServersByMissionID: [UUID: MCPServer] = [:]
 
+    public private(set) var externalMCPServer: MCPServer?
+    public private(set) var externalMCPURL: URL?
+    public private(set) var externalMCPMissionID: UUID?
+
     private let _events = AsyncEventSource<RuntimeEvent>()
     public var events: AsyncStream<RuntimeEvent> { _events.makeStream() }
 
@@ -3151,6 +3155,59 @@ public final class Engine {
 
     public func unregisterActiveMCPServer(for missionID: UUID) {
         activeMCPServersByMissionID.removeValue(forKey: missionID)
+    }
+
+    public var isExternalMCPRunning: Bool { externalMCPServer != nil }
+
+    @discardableResult
+    public func enableExternalMCPServer() async throws -> ExternalMCPInfo {
+        if let server = externalMCPServer, let url = externalMCPURL, let id = externalMCPMissionID {
+            return ExternalMCPInfo(url: url, bearerToken: server.bearerToken, missionID: id)
+        }
+
+        var mission = Mission(
+            goalText: "External tool calls (via MCP)",
+            providerID: "external",
+            modelID: "external",
+            tokenBudgetInput: 0,
+            tokenBudgetOutput: 0
+        )
+        mission.status = .running
+        try store.save(mission)
+        collaboration.enqueueMissionUpsert(mission)
+        externalMCPMissionID = mission.id
+
+        let toolNames = missionTools.specs().map(\.name)
+        let server = MCPServer(
+            engine: self,
+            resolveMission: { [weak self] in
+                guard let self, let id = self.externalMCPMissionID else { return nil }
+                return try? self.store.fetchMission(id: id)
+            },
+            toolNames: toolNames
+        )
+        let url = try await server.start()
+        externalMCPServer = server
+        externalMCPURL = url
+        registerActiveMCPServer(server, for: mission.id)
+
+        return ExternalMCPInfo(url: url, bearerToken: server.bearerToken, missionID: mission.id)
+    }
+
+    public func disableExternalMCPServer() async {
+        guard let server = externalMCPServer else { return }
+        if let id = externalMCPMissionID {
+            unregisterActiveMCPServer(for: id)
+            if var m = try? store.fetchMission(id: id) {
+                m.status = .completed
+                try? store.save(m)
+                collaboration.enqueueMissionUpsert(m)
+            }
+        }
+        await server.stop()
+        externalMCPServer = nil
+        externalMCPURL = nil
+        externalMCPMissionID = nil
     }
 
     @discardableResult

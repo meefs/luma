@@ -25,6 +25,10 @@ struct MissionsListView: View {
             .padding(.horizontal)
             .padding(.top)
 
+            ExternalMCPSection(workspace: workspace)
+                .padding(.horizontal)
+                .padding(.top, 8)
+
             if missions.isEmpty {
                 ContentUnavailableView(
                     "No missions yet",

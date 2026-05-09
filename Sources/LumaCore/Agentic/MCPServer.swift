@@ -12,19 +12,34 @@ public final class MCPServer {
     private let queue = DispatchQueue(label: "luma.mcp.server")
     private var listener: NWListener?
 
+    public typealias MissionResolver = @MainActor () async -> Mission?
+
     private weak var engine: Engine?
-    public let mission: Mission
+    private let resolveMission: MissionResolver
     private let toolNames: Set<String>
     public let bearerToken: String
 
     private var pendingApprovals: [UUID: CheckedContinuation<ApprovalDecision, Never>] = [:]
 
-    public init(engine: Engine, mission: Mission, toolNames: [String]) {
+    public init(
+        engine: Engine,
+        resolveMission: @escaping MissionResolver,
+        toolNames: [String],
+        bearerToken: String? = nil
+    ) {
         self.engine = engine
-        self.mission = mission
+        self.resolveMission = resolveMission
         self.toolNames = Set(toolNames)
-        let bytes = (0..<32).map { _ in UInt8.random(in: .min...UInt8.max) }
-        self.bearerToken = Data(bytes).base64EncodedString()
+        if let bearerToken {
+            self.bearerToken = bearerToken
+        } else {
+            let bytes = (0..<32).map { _ in UInt8.random(in: .min...UInt8.max) }
+            self.bearerToken = Data(bytes).base64EncodedString()
+        }
+    }
+
+    public convenience init(engine: Engine, mission: Mission, toolNames: [String]) {
+        self.init(engine: engine, resolveMission: { mission }, toolNames: toolNames)
     }
 
     public func approve(actionID: UUID) {
@@ -182,6 +197,9 @@ public final class MCPServer {
         }
         guard let spec = engine.missionTools.spec(named: toolName) else {
             return jsonRPCError(id: rpcID, code: -32_602, message: "unknown tool: \(toolName)")
+        }
+        guard let mission = await resolveMission() else {
+            return jsonRPCError(id: rpcID, code: -32_603, message: "no active mission to attribute this tool call to")
         }
 
         onToolStarted?(toolName, arguments)
