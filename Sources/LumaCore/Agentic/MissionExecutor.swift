@@ -102,6 +102,13 @@ public final class MissionExecutor {
                 return
             }
 
+            do {
+                try drainPendingUserMessage(mission: &mission)
+            } catch {
+                failMission(&mission, reason: "Could not enqueue user message: \(error.localizedDescription)")
+                return
+            }
+
             let request: LLMTurnRequest
             do {
                 request = try buildRequest(for: mission)
@@ -358,6 +365,47 @@ public final class MissionExecutor {
         let json = try JSONEncoder.iso.encode(blocks)
         let turn = MissionTurn(
             missionID: mission.id,
+            index: index,
+            role: .user,
+            contentJSON: String(data: json, encoding: .utf8) ?? "[]"
+        )
+        try persistTurn(turn)
+    }
+
+    private func drainPendingUserMessage(mission: inout Mission) throws {
+        let text = mission.pendingUserText
+        guard !text.isEmpty else { return }
+
+        mission.pendingUserText = ""
+        try store.save(mission)
+
+        let turns = try store.fetchMissionTurns(missionID: mission.id)
+        if let last = turns.last, last.role == .user {
+            try appendTextBlock(text, to: last)
+        } else {
+            try persistFreshUserTurn(text: text, missionID: mission.id)
+        }
+    }
+
+    private func appendTextBlock(_ text: String, to turn: MissionTurn) throws {
+        var blocks: [LLMContentBlock] = []
+        if let data = turn.contentJSON.data(using: .utf8) {
+            blocks = (try? JSONDecoder.iso.decode([LLMContentBlock].self, from: data)) ?? []
+        }
+        blocks.append(LLMContentBlock(content: .text(text)))
+        let json = try JSONEncoder.iso.encode(blocks)
+
+        var updated = turn
+        updated.contentJSON = String(data: json, encoding: .utf8) ?? "[]"
+        try persistTurn(updated)
+    }
+
+    private func persistFreshUserTurn(text: String, missionID: UUID) throws {
+        let blocks = [LLMContentBlock(content: .text(text))]
+        let json = try JSONEncoder.iso.encode(blocks)
+        let index = try store.nextMissionTurnIndex(missionID: missionID)
+        let turn = MissionTurn(
+            missionID: missionID,
             index: index,
             role: .user,
             contentJSON: String(data: json, encoding: .utf8) ?? "[]"

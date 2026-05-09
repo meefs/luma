@@ -20,6 +20,7 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
     public var cacheCreateTokens: Int
     public var thinkingBudget: Int
     public var temperature: Double?
+    public var pendingUserText: String
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -38,6 +39,7 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
         case cacheCreateTokens = "cache_create_tokens"
         case thinkingBudget = "thinking_budget"
         case temperature
+        case pendingUserText = "pending_user_text"
     }
 
     public init(
@@ -67,5 +69,6 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
         self.cacheCreateTokens = 0
         self.thinkingBudget = thinkingBudget
         self.temperature = temperature
+        self.pendingUserText = ""
     }
 }

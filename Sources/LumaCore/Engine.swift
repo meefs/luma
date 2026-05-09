@@ -3315,6 +3315,44 @@ public final class Engine {
         missionExecutor.cancel(missionID: missionID)
     }
 
+    public func appendMissionUserMessage(missionID: UUID, text: String) {
+        enqueueMissionUserText(missionID: missionID, text: text)
+        guard let mission = try? store.fetchMission(id: missionID) else { return }
+        switch mission.status {
+        case .running, .awaitingApproval:
+            break
+        case .paused, .completed, .failed, .cancelled, .drafting:
+            missionExecutor.resume(missionID: missionID)
+        }
+    }
+
+    public func sendMissionUserMessageNow(missionID: UUID, text: String) {
+        enqueueMissionUserText(missionID: missionID, text: text)
+        guard let mission = try? store.fetchMission(id: missionID) else { return }
+        switch mission.status {
+        case .running:
+            missionExecutor.cancel(missionID: missionID)
+            missionExecutor.resume(missionID: missionID)
+        case .awaitingApproval:
+            break
+        case .paused, .completed, .failed, .cancelled, .drafting:
+            missionExecutor.resume(missionID: missionID)
+        }
+    }
+
+    private func enqueueMissionUserText(missionID: UUID, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard var mission = try? store.fetchMission(id: missionID) else { return }
+        mission.pendingUserText = mergedSteer(existing: mission.pendingUserText, addition: trimmed)
+        try? store.save(mission)
+        collaboration.enqueueMissionUpsert(mission)
+    }
+
+    private func mergedSteer(existing: String, addition: String) -> String {
+        existing.isEmpty ? addition : "\(existing)\n\n\(addition)"
+    }
+
     public func deleteMission(missionID: UUID) {
         missionExecutor.cancel(missionID: missionID)
         try? store.deleteMission(id: missionID)

@@ -1030,6 +1030,7 @@ public final class ProjectStore: Sendable {
             t.column("cache_create_tokens", .integer).notNull().defaults(to: 0)
             t.column("thinking_budget", .integer).notNull().defaults(to: 0)
             t.column("temperature", .double)
+            t.column("pending_user_text", .text).notNull().defaults(to: "")
         }
 
         try db.create(table: "mission_turn", ifNotExists: true) { t in
