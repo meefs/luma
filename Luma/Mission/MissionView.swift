@@ -6,7 +6,6 @@ struct MissionView: View {
     let missionID: UUID
     @Binding var selection: SidebarItemID?
 
-    @State private var mission: Mission?
     @State private var turns: [MissionTurn] = []
     @State private var actions: [MissionAction] = []
     @State private var findings: [MissionFinding] = []
@@ -43,6 +42,10 @@ struct MissionView: View {
         .task(id: missionID) { startObservations() }
     }
 
+    private var mission: Mission? {
+        workspace.engine.missions.first(where: { $0.id == missionID })
+    }
+
     private var pendingActions: [MissionAction] {
         actions.filter { $0.status == .pending }
     }
@@ -50,24 +53,22 @@ struct MissionView: View {
     private func startObservations() {
         observations = []
         liveText = ""
-        mission = try? workspace.store.fetchMission(id: missionID)
-        guard let m = mission else { return }
 
-        turns = (try? workspace.store.fetchMissionTurns(missionID: m.id)) ?? []
-        actions = (try? workspace.store.fetchMissionActions(missionID: m.id)) ?? []
-        findings = (try? workspace.store.fetchMissionFindings(missionID: m.id)) ?? []
+        turns = (try? workspace.store.fetchMissionTurns(missionID: missionID)) ?? []
+        actions = (try? workspace.store.fetchMissionActions(missionID: missionID)) ?? []
+        findings = (try? workspace.store.fetchMissionFindings(missionID: missionID)) ?? []
 
-        observations.append(workspace.store.observeMissionTurns(missionID: m.id) { rows in
+        observations.append(workspace.store.observeMissionTurns(missionID: missionID) { rows in
             Task { @MainActor in turns = rows }
         })
-        observations.append(workspace.store.observeMissionActions(missionID: m.id) { rows in
+        observations.append(workspace.store.observeMissionActions(missionID: missionID) { rows in
             Task { @MainActor in actions = rows }
         })
-        observations.append(workspace.store.observeMissionFindings(missionID: m.id) { rows in
+        observations.append(workspace.store.observeMissionFindings(missionID: missionID) { rows in
             Task { @MainActor in findings = rows }
         })
 
-        workspace.engine.setMissionLiveDeltaSink { [missionID = m.id] eventMissionID, event in
+        workspace.engine.setMissionLiveDeltaSink { [missionID] eventMissionID, event in
             guard eventMissionID == missionID else { return }
             switch event {
             case .textDelta(let text):
