@@ -274,7 +274,7 @@ final class SessionDetailView {
         lastNodeAvailable = true
 
         renderModules(node.modules)
-        renderThreads(node.threads)
+        renderThreads(currentThreads(of: node))
 
         modulesTask = Task { @MainActor [weak self, weak node] in
             guard let node else { return }
@@ -286,9 +286,15 @@ final class SessionDetailView {
         threadsTask = Task { @MainActor [weak self, weak node] in
             guard let node else { return }
             for await _ in node.threadDeltas {
-                self?.renderThreads(node.threads)
+                guard let self else { continue }
+                self.renderThreads(self.currentThreads(of: node))
             }
         }
+    }
+
+    private func currentThreads(of node: LumaCore.ProcessNode) -> [LumaCore.ProcessThread] {
+        let live = node.threads
+        return live.isEmpty ? persistedThreads() : live
     }
 
     private func rebuildSummary(session: LumaCore.ProcessSession) {
