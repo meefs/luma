@@ -14,6 +14,12 @@ export function readMemory(address: string, count: number): ArrayBuffer {
     return ptr(address).readByteArray(count)!;
 }
 
+export function writeMemory(address: string, bytes: ArrayBuffer | number[]): number {
+    const buffer = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes);
+    ptr(address).writeByteArray(Array.from(buffer));
+    return buffer.length;
+}
+
 Process.attachModuleObserver({
     onAdded(module) {
         const key = moduleKey(module);

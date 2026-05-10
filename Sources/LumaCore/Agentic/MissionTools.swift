@@ -14,6 +14,10 @@ public enum MissionTools {
         registerAttachToProcess(in: catalog, engine: engine)
         registerSpawnProcess(in: catalog, engine: engine)
         registerListModules(in: catalog, engine: engine)
+        registerListThreads(in: catalog, engine: engine)
+        registerListSessionInstruments(in: catalog, engine: engine)
+        registerArmSession(in: catalog, engine: engine)
+        registerDisarmSession(in: catalog, engine: engine)
         registerSummarizeRecentEvents(in: catalog, engine: engine)
         registerWaitForEvent(in: catalog, engine: engine)
         registerResolveSymbol(in: catalog, engine: engine)
@@ -21,6 +25,7 @@ public enum MissionTools {
         registerDecompile(in: catalog, engine: engine)
         registerExplainFunction(in: catalog, engine: engine)
         registerReadMemory(in: catalog, engine: engine)
+        registerWriteMemory(in: catalog, engine: engine)
         registerRecordFinding(in: catalog, engine: engine)
         registerListNotebookEntries(in: catalog, engine: engine)
         registerReadNotebookEntry(in: catalog, engine: engine)
@@ -54,6 +59,11 @@ public enum MissionTools {
         registerReadTraceFunctionCall(in: catalog, engine: engine)
         registerReadTraceRegisterState(in: catalog, engine: engine)
         registerPinAsInsight(in: catalog, engine: engine)
+        registerListAddressInsights(in: catalog, engine: engine)
+        registerUnpinInsight(in: catalog, engine: engine)
+        registerDetachSession(in: catalog, engine: engine)
+        registerReadWidgetState(in: catalog, engine: engine)
+        registerInvokeWidgetAction(in: catalog, engine: engine)
         registerRequestUserInput(in: catalog)
     }
 
@@ -70,7 +80,7 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] _ in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             let devices = await engine.deviceManager.currentDevices()
             let array: [[String: Any]] = devices.map { d in
                 [
@@ -97,13 +107,13 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let deviceID = invocation.args["device_id"] as? String else {
-                return errorResult("missing device_id")
+                return errorResult("missing device_id", code: .invalidInput)
             }
             let devices = await engine.deviceManager.currentDevices()
             guard let device = devices.first(where: { $0.id == deviceID }) else {
-                return errorResult("no device with id \(deviceID)")
+                return errorResult("no device with id \(deviceID)", code: .notFound)
             }
             let scope = parseProcessScope(invocation.args["scope"] as? String)
             let patternString = (invocation.args["name_pattern"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -112,7 +122,7 @@ public enum MissionTools {
                 do {
                     regex = try Regex(patternString).ignoresCase()
                 } catch {
-                    return errorResult("invalid name_pattern: \(error.localizedDescription)")
+                    return errorResult("invalid name_pattern: \(error.localizedDescription)", code: .invalidInput)
                 }
             } else {
                 regex = nil
@@ -200,22 +210,22 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let deviceID = invocation.args["device_id"] as? String else {
-                return errorResult("missing device_id")
+                return errorResult("missing device_id", code: .invalidInput)
             }
             guard let pidNumber = invocation.args["pid"] as? Int, pidNumber > 0 else {
-                return errorResult("missing or invalid pid")
+                return errorResult("missing or invalid pid", code: .invalidInput)
             }
             let pid = UInt(pidNumber)
             let devices = await engine.deviceManager.currentDevices()
             guard let device = devices.first(where: { $0.id == deviceID }) else {
-                return errorResult("no device with id \(deviceID)")
+                return errorResult("no device with id \(deviceID)", code: .notFound)
             }
             do {
                 let processes = try await device.enumerateProcesses(pids: [pid], scope: .full)
                 guard let process = processes.first else {
-                    return errorResult("pid \(pid) not found on \(device.name)")
+                    return errorResult("pid \(pid) not found on \(device.name)", code: .notFound)
                 }
                 if let existing = findExistingAttach(in: engine, deviceID: device.id, pid: pid) {
                     return await reuseAttachSession(existing, engine: engine, device: device, process: process)
@@ -253,33 +263,33 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let deviceID = invocation.args["device_id"] as? String else {
-                return errorResult("missing device_id")
+                return errorResult("missing device_id", code: .invalidInput)
             }
             let devices = await engine.deviceManager.currentDevices()
             guard let device = devices.first(where: { $0.id == deviceID }) else {
-                return errorResult("no device with id \(deviceID)")
+                return errorResult("no device with id \(deviceID)", code: .notFound)
             }
             guard let kind = invocation.args["target_kind"] as? String else {
-                return errorResult("missing target_kind")
+                return errorResult("missing target_kind", code: .invalidInput)
             }
 
             let target: SpawnConfig.Target
             switch kind {
             case "program":
                 guard let path = invocation.args["path"] as? String, !path.isEmpty else {
-                    return errorResult("program target requires non-empty 'path'")
+                    return errorResult("program target requires non-empty 'path'", code: .invalidInput)
                 }
                 target = .program(path: path)
             case "application":
                 guard let identifier = invocation.args["identifier"] as? String, !identifier.isEmpty else {
-                    return errorResult("application target requires non-empty 'identifier'")
+                    return errorResult("application target requires non-empty 'identifier'", code: .invalidInput)
                 }
                 let displayName = (invocation.args["name"] as? String) ?? identifier
                 target = .application(identifier: identifier, name: displayName)
             default:
-                return errorResult("unknown target_kind: \(kind)")
+                return errorResult("unknown target_kind: \(kind)", code: .invalidInput)
             }
 
             let arguments = (invocation.args["arguments"] as? [String]) ?? []
@@ -410,10 +420,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let node = engine.node(forSessionID: sessionID) else {
-                return errorResult("no attached session for id \(sessionID)")
+                return errorResult("no attached session for id \(sessionID)", code: .notFound)
             }
             let mods = node.modules
             let array: [[String: Any]] = mods.map { m in
@@ -425,6 +435,112 @@ public enum MissionTools {
                 ]
             }
             return makeResult(jsonObject: array, summary: "Listed \(mods.count) module\(mods.count == 1 ? "" : "s")")
+        }
+    }
+
+    // MARK: - list_threads
+
+    private static func registerListThreads(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "list_threads",
+            description: "List the target process's known threads: tid, name (when assigned), and entrypoint routine address. Live for attached sessions; falls back to the last cached snapshot when the session is detached.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            let liveThreads = engine.node(forSessionID: sessionID)?.threads
+            let cached = engine.sessions.first(where: { $0.id == sessionID })?.lastKnownThreads
+            guard let threads = liveThreads ?? cached else {
+                return errorResult("no thread data for session \(sessionID)", code: .notFound)
+            }
+            let array: [[String: Any]] = threads.map { $0.toJSON() }
+            return makeResult(jsonObject: array, summary: "Listed \(threads.count) thread\(threads.count == 1 ? "" : "s")")
+        }
+    }
+
+    // MARK: - list_session_instruments
+
+    private static func registerListSessionInstruments(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "list_session_instruments",
+            description: "List all instruments currently attached to a session: tracer hooks, custom instrument instances, hookpacks, and codeshare snippets. Returns id, kind, source_identifier, state. Use to understand what's already running before adding more.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            let instances = engine.instrumentsBySession[sessionID] ?? []
+            let array: [[String: Any]] = instances.map { instance in
+                [
+                    "id": instance.id.uuidString,
+                    "kind": instance.kind.rawValue,
+                    "source_identifier": instance.sourceIdentifier,
+                    "state": instance.state.rawValue,
+                ]
+            }
+            return makeResult(jsonObject: array, summary: "\(array.count) instrument\(array.count == 1 ? "" : "s") attached")
+        }
+    }
+
+    // MARK: - arm_session / disarm_session
+
+    private static func registerArmSession(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "arm_session",
+            description: "Arm spawn-gating on the session's device with the given match pattern (glob over identifiers / process names). Newly-spawned processes that match get held for inspection until the session resumes them. Requires user approval.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"},"match_pattern":{"type":"string","description":"Glob matched against new process identifiers / names"}},"required":["session_id","match_pattern"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let pattern = invocation.args["match_pattern"] as? String, !pattern.isEmpty else {
+                return errorResult("missing match_pattern", code: .invalidInput)
+            }
+            guard engine.sessions.contains(where: { $0.id == sessionID }) else {
+                return errorResult("no session with id \(sessionID)", code: .notFound)
+            }
+            await engine.armSession(id: sessionID, matchPattern: pattern)
+            let payload: [String: Any] = ["session_id": sessionID.uuidString, "match_pattern": pattern]
+            return makeResult(jsonObject: payload, summary: "Armed session with pattern \(pattern)")
+        }
+    }
+
+    private static func registerDisarmSession(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "disarm_session",
+            description: "Stop spawn-gating on the session's device.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard engine.sessions.contains(where: { $0.id == sessionID }) else {
+                return errorResult("no session with id \(sessionID)", code: .notFound)
+            }
+            await engine.disarmSession(id: sessionID)
+            let payload: [String: Any] = ["session_id": sessionID.uuidString]
+            return makeResult(jsonObject: payload, summary: "Disarmed session")
         }
     }
 
@@ -441,14 +557,14 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             let limit = (invocation.args["limit"] as? Int) ?? 50
             do {
                 let filter = try parseEventFilter(invocation.args)
                 let matched = filteredEvents(engine.eventLog.events, filter: filter)
                 return eventsResult(Array(matched.suffix(limit)), totalConsidered: matched.count)
             } catch let error as EventFilterError {
-                return errorResult(error.message)
+                return errorResult(error.message, code: .invalidInput)
             } catch {
                 return errorResult("filter failed: \(error.localizedDescription)")
             }
@@ -466,14 +582,14 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             let limit = (invocation.args["limit"] as? Int) ?? 50
             let timeoutMs = min((invocation.args["timeout_ms"] as? Int) ?? 30_000, 60_000)
             let filter: EventFilter
             do {
                 filter = try parseEventFilter(invocation.args)
             } catch let error as EventFilterError {
-                return errorResult(error.message)
+                return errorResult(error.message, code: .invalidInput)
             } catch {
                 return errorResult("filter failed: \(error.localizedDescription)")
             }
@@ -570,15 +686,15 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let node = engine.node(forSessionID: sessionID) else {
-                return errorResult("no attached session for id \(sessionID)")
+                return errorResult("no attached session for id \(sessionID)", code: .notFound)
             }
             guard let scope = invocation.args["scope"] as? String,
                 let query = invocation.args["query"] as? String
             else {
-                return errorResult("missing scope or query")
+                return errorResult("missing scope or query", code: .invalidInput)
             }
             do {
                 let results = try await node.resolveTargets(scope: scope, query: query)
@@ -603,16 +719,16 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let addrString = invocation.args["address"] as? String,
                 let address = parseHexAddress(addrString)
             else {
-                return errorResult("missing or invalid address")
+                return errorResult("missing or invalid address", code: .invalidInput)
             }
             let count = (invocation.args["count"] as? Int) ?? 32
             guard let dis = engine.disassembler(forSessionID: sessionID) else {
-                return errorResult("no disassembler for session")
+                return errorResult("no disassembler for session", code: .notFound)
             }
             let lines = await dis.disassemble(DisassemblyRequest(address: address, count: count, isDarkMode: false))
             let text = lines.map { line in
@@ -631,40 +747,93 @@ public enum MissionTools {
     private static func registerReadMemory(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "read_memory",
-            description: "Read up to 4096 bytes of process memory. Returns hex bytes plus a UTF-8 best-effort decode if the bytes look like a string. Use sparingly — large reads burn tokens.",
+            description: "Read up to 4096 bytes of process memory. 'format' picks the response shape: 'hex' (space-separated hex bytes, default), 'utf8' (decoded string up to the first invalid sequence), or 'cstring' (NUL-terminated C string, count is the maximum scan length). Use the narrowest format that answers your question — large hex dumps burn tokens.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"session_id":{"type":"string"},"address":{"type":"string","description":"Hex address"},"count":{"type":"integer","minimum":1,"maximum":4096,"default":256}},"required":["session_id","address"],"additionalProperties":false}
+                {"type":"object","properties":{"session_id":{"type":"string"},"address":{"type":"string","description":"Hex address"},"count":{"type":"integer","minimum":1,"maximum":4096,"default":256},"format":{"type":"string","enum":["hex","utf8","cstring"],"default":"hex"}},"required":["session_id","address"],"additionalProperties":false}
                 """,
             isObserve: true,
             requiresSession: true
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let addrString = invocation.args["address"] as? String,
                 let address = parseHexAddress(addrString)
             else {
-                return errorResult("missing or invalid address")
+                return errorResult("missing or invalid address", code: .invalidInput)
             }
             let count = min((invocation.args["count"] as? Int) ?? 256, 4096)
+            let format = (invocation.args["format"] as? String) ?? "hex"
+            guard ["hex", "utf8", "cstring"].contains(format) else {
+                return errorResult("format must be one of hex, utf8, cstring", code: .invalidInput)
+            }
             guard let node = engine.node(forSessionID: sessionID) else {
-                return errorResult("no attached session for id \(sessionID)")
+                return errorResult("no attached session for id \(sessionID)", code: .notFound)
             }
             do {
                 let bytes = try await node.readRemoteMemory(at: address, count: count)
-                let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
-                let asString = String(bytes: bytes, encoding: .utf8) ?? ""
-                let printable = asString.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value < 0x7f } ? asString : nil
+                var payload: [String: Any] = [
+                    "address": addrString,
+                    "count": bytes.count,
+                    "format": format,
+                ]
+                switch format {
+                case "hex":
+                    payload["hex"] = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+                case "utf8":
+                    payload["string"] = String(bytes: bytes, encoding: .utf8) as Any? ?? NSNull()
+                case "cstring":
+                    let nulIndex = bytes.firstIndex(of: 0) ?? bytes.endIndex
+                    payload["string"] = String(bytes: bytes[..<nulIndex], encoding: .utf8) as Any? ?? NSNull()
+                default:
+                    break
+                }
+                return makeResult(jsonObject: payload, summary: "Read \(bytes.count) bytes at \(addrString)")
+            } catch {
+                return errorResult("memory read failed: \(error.localizedDescription)", code: .failed)
+            }
+        }
+    }
+
+    private static func registerWriteMemory(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "write_memory",
+            description: "Write up to 4096 bytes to process memory. Pass 'bytes' as a hex string (e.g. 'deadbeef'). Returns the number of bytes written. Requires user approval; only use when you've justified the patch in a finding.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"},"address":{"type":"string","description":"Hex address"},"bytes":{"type":"string","description":"Hex string of bytes to write (no 0x prefix, no spaces, even length)"}},"required":["session_id","address","bytes"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let addrString = invocation.args["address"] as? String,
+                let address = parseHexAddress(addrString)
+            else {
+                return errorResult("missing or invalid address", code: .invalidInput)
+            }
+            guard let hexString = invocation.args["bytes"] as? String,
+                let bytes = parseHexBytes(hexString),
+                !bytes.isEmpty,
+                bytes.count <= 4096
+            else {
+                return errorResult("bytes must be a non-empty even-length hex string up to 8192 chars", code: .invalidInput)
+            }
+            guard let node = engine.node(forSessionID: sessionID) else {
+                return errorResult("no attached session for id \(sessionID)", code: .notFound)
+            }
+            do {
+                try await node.writeRemoteMemory(at: address, bytes: bytes)
                 let payload: [String: Any] = [
                     "address": addrString,
                     "count": bytes.count,
-                    "hex": hex,
-                    "string": printable as Any? ?? NSNull(),
                 ]
-                return makeResult(jsonObject: payload, summary: "Read \(bytes.count) bytes at \(addrString)")
+                return makeResult(jsonObject: payload, summary: "Wrote \(bytes.count) bytes at \(addrString)")
             } catch {
-                return errorResult("memory read failed: \(error.localizedDescription)")
+                return errorResult("memory write failed: \(error.localizedDescription)")
             }
         }
     }
@@ -682,7 +851,7 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] _ in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             let array = engine.notebookEntries.map(notebookListEntry)
             return makeResult(jsonObject: array, summary: "\(array.count) notebook entr\(array.count == 1 ? "y" : "ies")")
         }
@@ -699,12 +868,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let entryID = (invocation.args["entry_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid entry_id")
+                return errorResult("missing or invalid entry_id", code: .invalidInput)
             }
             guard let entry = engine.notebookEntries.first(where: { $0.id == entryID }) else {
-                return errorResult("no notebook entry with id \(entryID)")
+                return errorResult("no notebook entry with id \(entryID)", code: .notFound)
             }
             var payload = notebookListEntry(entry)
             payload["details"] = entry.details
@@ -723,12 +892,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let title = invocation.args["title"] as? String, !title.isEmpty else {
-                return errorResult("missing title")
+                return errorResult("missing title", code: .invalidInput)
             }
             guard let details = invocation.args["details"] as? String else {
-                return errorResult("missing details")
+                return errorResult("missing details", code: .invalidInput)
             }
             let kind: NotebookEntry.Kind = ((invocation.args["kind"] as? String) == "capture") ? .capture : .note
             let sessionID = (invocation.args["session_id"] as? String).flatMap(UUID.init(uuidString:))
@@ -756,12 +925,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let entryID = (invocation.args["entry_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid entry_id")
+                return errorResult("missing or invalid entry_id", code: .invalidInput)
             }
             guard var entry = engine.notebookEntries.first(where: { $0.id == entryID }) else {
-                return errorResult("no notebook entry with id \(entryID)")
+                return errorResult("no notebook entry with id \(entryID)", code: .notFound)
             }
             if let title = invocation.args["title"] as? String, !title.isEmpty {
                 entry.title = title
@@ -788,12 +957,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let entryID = (invocation.args["entry_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid entry_id")
+                return errorResult("missing or invalid entry_id", code: .invalidInput)
             }
             guard let entry = engine.notebookEntries.first(where: { $0.id == entryID }) else {
-                return errorResult("no notebook entry with id \(entryID)")
+                return errorResult("no notebook entry with id \(entryID)", code: .notFound)
             }
             engine.deleteNotebookEntry(entry)
             return makeResult(jsonObject: ["entry_id": entryID.uuidString, "removed": true], summary: "Deleted notebook entry: \(entry.title)")
@@ -822,22 +991,22 @@ public enum MissionTools {
     private static func registerEvalREPL(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "eval_repl",
-            description: "Run a one-off JavaScript snippet in the target process via Frida's REPL. Use for quick one-shot probes (e.g. read a global). The result string is the stringified value or any console output.",
+            description: "Run a one-off JavaScript snippet in the target process via Frida's REPL. Use for quick one-shot probes (e.g. read a global). The result string is the stringified value or any console output. Requires user approval — `intent` is shown to the approver and recorded in the audit log, so write a sentence that makes the why obvious.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"session_id":{"type":"string"},"code":{"type":"string"},"intent":{"type":"string","description":"One sentence on why you're running this"}},"required":["session_id","code","intent"],"additionalProperties":false}
+                {"type":"object","properties":{"session_id":{"type":"string"},"code":{"type":"string"},"intent":{"type":"string","description":"One sentence shown to the approver explaining why you're running this; logged with the action."}},"required":["session_id","code","intent"],"additionalProperties":false}
                 """,
             isObserve: false,
             requiresSession: true
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let code = invocation.args["code"] as? String, !code.isEmpty else {
-                return errorResult("missing code")
+                return errorResult("missing code", code: .invalidInput)
             }
             guard let node = engine.node(forSessionID: sessionID) else {
-                return errorResult("no attached session for id \(sessionID)")
+                return errorResult("no attached session for id \(sessionID)", code: .notFound)
             }
             let cellID = UUID()
             await node.evalInREPL(code, cellID: cellID)
@@ -866,10 +1035,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let target = invocation.args["target"] as? String, !target.isEmpty else {
-                return errorResult("missing target")
+                return errorResult("missing target", code: .invalidInput)
             }
             let kindString = (invocation.args["kind"] as? String) ?? "function"
             let kind: TracerHookKind = kindString == "instruction" ? .instruction : .function
@@ -882,7 +1051,7 @@ public enum MissionTools {
                 address = parsed
             } else {
                 guard let node = engine.node(forSessionID: sessionID) else {
-                    return errorResult("no attached session for id \(sessionID)")
+                    return errorResult("no attached session for id \(sessionID)", code: .notFound)
                 }
                 do {
                     let resolved = try await node.resolveTargets(scope: scope, query: target)
@@ -890,7 +1059,7 @@ public enum MissionTools {
                         let addrStr = first["address"] as? String,
                         let parsed = parseHexAddress(addrStr)
                     else {
-                        return errorResult("could not resolve target '\(target)' under scope '\(scope)'")
+                        return errorResult("could not resolve target '\(target)' under scope '\(scope)'", code: .notFound)
                     }
                     address = parsed
                     preferredAnchor = decodeAnchorJSON(first["anchor"] as? [String: Any])
@@ -956,7 +1125,7 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let hooks = engine.tracerHooks(forSessionID: sessionID) else {
                 return makeResult(jsonObject: [], summary: "No tracer instrument on this session")
@@ -980,13 +1149,13 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let hookID = (invocation.args["hook_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid hook_id")
+                return errorResult("missing or invalid hook_id", code: .invalidInput)
             }
             guard let hook = engine.tracerHook(sessionID: sessionID, hookID: hookID) else {
-                return errorResult("no tracer hook with id \(hookID)")
+                return errorResult("no tracer hook with id \(hookID)", code: .notFound)
             }
             var payload = hookListEntry(hook)
             payload["code"] = hook.code
@@ -1006,10 +1175,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let hookID = (invocation.args["hook_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid hook_id")
+                return errorResult("missing or invalid hook_id", code: .invalidInput)
             }
             let code = invocation.args["code"] as? String
             let displayName = invocation.args["display_name"] as? String
@@ -1030,7 +1199,7 @@ public enum MissionTools {
                     hook.itraceArming = ITraceArming(maxInvocations: maxInvocations, maxBytesPerInvocation: maxBytes)
                 }
             }) else {
-                return errorResult("no tracer hook with id \(hookID)")
+                return errorResult("no tracer hook with id \(hookID)", code: .notFound)
             }
             return makeResult(jsonObject: hookListEntry(updated), summary: "Updated hook \(updated.displayName)")
         }
@@ -1065,14 +1234,14 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let hookID = (invocation.args["hook_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid hook_id")
+                return errorResult("missing or invalid hook_id", code: .invalidInput)
             }
             let removed = await engine.removeTracerHook(sessionID: sessionID, hookID: hookID)
             guard removed else {
-                return errorResult("no tracer hook with id \(hookID)")
+                return errorResult("no tracer hook with id \(hookID)", code: .notFound)
             }
             let payload: [String: Any] = ["hook_id": hookID.uuidString, "removed": true]
             return makeResult(jsonObject: payload, summary: "Removed hook \(hookID)")
@@ -1092,7 +1261,7 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] _ in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             let array: [[String: Any]] = engine.customInstruments.defs.map { def in
                 [
                     "id": def.id.uuidString,
@@ -1117,12 +1286,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id")
+                return errorResult("missing or invalid def_id", code: .invalidInput)
             }
             guard let def = engine.customInstruments.def(withId: defID) else {
-                return errorResult("no custom instrument with id \(defID)")
+                return errorResult("no custom instrument with id \(defID)", code: .notFound)
             }
             return makeResult(jsonObject: customInstrumentJSON(def: def), summary: "Custom instrument \(def.name)")
         }
@@ -1139,12 +1308,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let name = invocation.args["name"] as? String, !name.isEmpty else {
-                return errorResult("missing name")
+                return errorResult("missing name", code: .invalidInput)
             }
             guard let source = invocation.args["source"] as? String, !source.isEmpty else {
-                return errorResult("missing source")
+                return errorResult("missing source", code: .invalidInput)
             }
             let icon = parseIconArg(invocation.args["icon"] as? String)
             let features = parseFeaturesArg(invocation.args["features"])
@@ -1170,12 +1339,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id")
+                return errorResult("missing or invalid def_id", code: .invalidInput)
             }
             guard var def = engine.customInstruments.def(withId: defID) else {
-                return errorResult("no custom instrument with id \(defID)")
+                return errorResult("no custom instrument with id \(defID)", code: .notFound)
             }
             if let name = invocation.args["name"] as? String, !name.isEmpty {
                 def.name = name
@@ -1208,12 +1377,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id")
+                return errorResult("missing or invalid def_id", code: .invalidInput)
             }
             guard engine.customInstruments.def(withId: defID) != nil else {
-                return errorResult("no custom instrument with id \(defID)")
+                return errorResult("no custom instrument with id \(defID)", code: .notFound)
             }
             await engine.deleteCustomInstrument(defID)
             return makeResult(jsonObject: ["def_id": defID.uuidString, "removed": true], summary: "Deleted custom instrument \(defID)")
@@ -1232,13 +1401,13 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id")
+                return errorResult("missing or invalid def_id", code: .invalidInput)
             }
             guard let instance = await engine.attachCustomInstrument(sessionID: sessionID, defID: defID) else {
-                return errorResult("could not attach: no custom instrument with id \(defID)")
+                return errorResult("could not attach: no custom instrument with id \(defID)", code: .notFound)
             }
             let payload: [String: Any] = [
                 "instrument_id": instance.id.uuidString,
@@ -1261,10 +1430,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { invocation in
             guard let kind = invocation.args["kind"] as? String else {
-                return errorResult("missing kind")
+                return errorResult("missing kind", code: .invalidInput)
             }
             guard let template = tracerHandlerTemplate(kind: kind) else {
-                return errorResult("unknown kind '\(kind)'")
+                return errorResult("unknown kind '\(kind)'", code: .invalidInput)
             }
             return makeResult(jsonObject: ["kind": kind, "template": template], summary: "\(kind) tracer handler template")
         }
@@ -1299,12 +1468,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id")
+                return errorResult("missing or invalid def_id", code: .invalidInput)
             }
             guard let def = engine.customInstruments.def(withId: defID) else {
-                return errorResult("no custom instrument with id \(defID)")
+                return errorResult("no custom instrument with id \(defID)", code: .notFound)
             }
             let scoped = CustomInstrumentTypings.defScopedDeclarations(for: def)
             let payload: [String: Any] = [
@@ -1327,10 +1496,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { invocation in
             guard let query = (invocation.args["query"] as? String)?.trimmingCharacters(in: .whitespaces), !query.isEmpty else {
-                return errorResult("missing query")
+                return errorResult("missing query", code: .invalidInput)
             }
             guard let typings = TypeScriptTypings.fridaGum else {
-                return errorResult("Frida API reference unavailable in this build")
+                return errorResult("Frida API reference unavailable in this build", code: .unavailable)
             }
             let cap = (invocation.args["max_matches"] as? Int) ?? 12
             let matches = searchFridaDeclarations(in: typings.content, query: query, limit: cap)
@@ -1426,7 +1595,7 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] _ in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             let array: [[String: Any]] = engine.installedPackages.map { pkg in
                 var entry: [String: Any] = [
                     "name": pkg.name,
@@ -1452,9 +1621,9 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let name = invocation.args["name"] as? String, !name.isEmpty else {
-                return errorResult("missing name")
+                return errorResult("missing name", code: .invalidInput)
             }
             let version = invocation.args["version"] as? String
             let globalAlias = invocation.args["global_alias"] as? String
@@ -1482,12 +1651,12 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let name = invocation.args["name"] as? String, !name.isEmpty else {
-                return errorResult("missing name")
+                return errorResult("missing name", code: .invalidInput)
             }
             guard let pkg = engine.installedPackages.first(where: { $0.name == name }) else {
-                return errorResult("no installed package named '\(name)'")
+                return errorResult("no installed package named '\(name)'", code: .notFound)
             }
             do {
                 try await engine.removePackage(pkg)
@@ -1510,10 +1679,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let threadIDRaw = invocation.args["thread_id"] as? Int, threadIDRaw >= 0 else {
-                return errorResult("missing or invalid thread_id")
+                return errorResult("missing or invalid thread_id", code: .invalidInput)
             }
             let threadName = invocation.args["thread_name"] as? String
             guard let trace = await engine.startThreadTrace(sessionID: sessionID, threadID: UInt(threadIDRaw), threadName: threadName) else {
@@ -1535,10 +1704,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let traceID = (invocation.args["trace_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid trace_id")
+                return errorResult("missing or invalid trace_id", code: .invalidInput)
             }
             await engine.stopThreadTrace(traceID: traceID, sessionID: sessionID)
             return makeResult(jsonObject: ["trace_id": traceID.uuidString, "stopped": true], summary: "Stopped trace \(traceID)")
@@ -1557,7 +1726,7 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             let traces = engine.tracesBySession[sessionID] ?? []
             let array = traces.map(traceListEntry)
@@ -1577,10 +1746,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let traceID = (invocation.args["trace_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid trace_id")
+                return errorResult("missing or invalid trace_id", code: .invalidInput)
             }
             guard let decoded = await engine.decodeTrace(traceID: traceID, sessionID: sessionID) else {
                 return errorResult("could not decode trace \(traceID)")
@@ -1624,10 +1793,10 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let traceID = (invocation.args["trace_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid trace_id")
+                return errorResult("missing or invalid trace_id", code: .invalidInput)
             }
             guard let decoded = await engine.decodeTrace(traceID: traceID, sessionID: sessionID) else {
                 return errorResult("could not decode trace \(traceID)")
@@ -1667,19 +1836,19 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let traceID = (invocation.args["trace_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid trace_id")
+                return errorResult("missing or invalid trace_id", code: .invalidInput)
             }
             guard let callIndex = invocation.args["call_index"] as? Int, callIndex >= 0 else {
-                return errorResult("missing or invalid call_index")
+                return errorResult("missing or invalid call_index", code: .invalidInput)
             }
             guard let decoded = await engine.decodeTrace(traceID: traceID, sessionID: sessionID) else {
                 return errorResult("could not decode trace \(traceID)")
             }
             guard callIndex < decoded.functionCalls.count else {
-                return errorResult("call_index \(callIndex) out of range (\(decoded.functionCalls.count) calls)")
+                return errorResult("call_index \(callIndex) out of range (\(decoded.functionCalls.count) calls)", code: .invalidInput)
             }
             let call = decoded.functionCalls[callIndex]
             let maxBlocks = (invocation.args["max_blocks"] as? Int) ?? 200
@@ -1718,19 +1887,19 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let traceID = (invocation.args["trace_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid trace_id")
+                return errorResult("missing or invalid trace_id", code: .invalidInput)
             }
             guard let entryIndex = invocation.args["entry_index"] as? Int, entryIndex >= 0 else {
-                return errorResult("missing or invalid entry_index")
+                return errorResult("missing or invalid entry_index", code: .invalidInput)
             }
             guard let decoded = await engine.decodeTrace(traceID: traceID, sessionID: sessionID) else {
                 return errorResult("could not decode trace \(traceID)")
             }
             guard entryIndex < decoded.registerStates.count else {
-                return errorResult("entry_index \(entryIndex) out of range (\(decoded.registerStates.count) entries)")
+                return errorResult("entry_index \(entryIndex) out of range (\(decoded.registerStates.count) entries)", code: .invalidInput)
             }
             let state = decoded.registerStates[entryIndex]
             var values: [String: String] = [:]
@@ -1942,7 +2111,7 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable") }
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
             guard let title = invocation.args["title"] as? String,
                 let body = invocation.args["body_markdown"] as? String,
                 let confidenceStr = invocation.args["confidence"] as? String,
@@ -1951,7 +2120,7 @@ public enum MissionTools {
                 let evidenceList = invocation.args["evidence"] as? [[String: Any]],
                 !evidenceList.isEmpty
             else {
-                return errorResult("invalid arguments — title, body_markdown, confidence, kind, and non-empty evidence are required")
+                return errorResult("invalid arguments — title, body_markdown, confidence, kind, and non-empty evidence are required", code: .invalidInput)
             }
 
             let actions = (try? engine.store.fetchMissionActions(missionID: invocation.mission.id)) ?? []
@@ -1966,14 +2135,14 @@ public enum MissionTools {
                     let evKind = MissionEvidenceKind(rawValue: kindStr),
                     let ref = entry["ref"] as? [String: Any]
                 else {
-                    return errorResult("evidence entry malformed: \(entry)")
+                    return errorResult("evidence entry malformed: \(entry)", code: .invalidInput)
                 }
 
                 if evKind == .action {
                     guard let cid = ref["tool_call_id"] as? String,
                         actionsByCallID[cid] != nil
                     else {
-                        return errorResult("evidence references unknown tool_call_id; this finding is not grounded")
+                        return errorResult("evidence references unknown tool_call_id; this finding is not grounded", code: .invalidInput)
                     }
                 }
                 validatedEvidence.append((evKind, ref))
@@ -2029,15 +2198,15 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let addrString = invocation.args["address"] as? String,
                 let address = parseHexAddress(addrString)
             else {
-                return errorResult("missing or invalid address")
+                return errorResult("missing or invalid address", code: .invalidInput)
             }
             guard let dis = engine.disassembler(forSessionID: sessionID) else {
-                return errorResult("no disassembler for session")
+                return errorResult("no disassembler for session", code: .notFound)
             }
             let text = await dis.decompile(at: address)
             let payload: [String: Any] = ["address": addrString, "text": text]
@@ -2059,15 +2228,15 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let addrString = invocation.args["address"] as? String,
                 let address = parseHexAddress(addrString)
             else {
-                return errorResult("missing or invalid address")
+                return errorResult("missing or invalid address", code: .invalidInput)
             }
             guard let dis = engine.disassembler(forSessionID: sessionID) else {
-                return errorResult("no disassembler for session")
+                return errorResult("no disassembler for session", code: .notFound)
             }
             let focus = (invocation.args["focus"] as? String) ?? ""
 
@@ -2141,13 +2310,13 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { [weak engine] invocation in
             guard let engine, let sessionID = parseSessionID(invocation.args) else {
-                return errorResult("missing or invalid session_id")
+                return errorResult("missing or invalid session_id", code: .invalidInput)
             }
             guard let findingIDString = invocation.args["finding_id"] as? String,
                 let findingID = UUID(uuidString: findingIDString),
                 var finding = (try? engine.store.fetchMissionFindings(missionID: invocation.mission.id))?.first(where: { $0.id == findingID })
             else {
-                return errorResult("finding_id does not match a finding in this mission")
+                return errorResult("finding_id does not match a finding in this mission", code: .invalidInput)
             }
 
             let kindString = (invocation.args["kind"] as? String) ?? "disassembly"
@@ -2158,15 +2327,15 @@ public enum MissionTools {
                 do {
                     anchor = try AddressAnchor.fromJSON(anchorObj)
                 } catch {
-                    return errorResult("anchor parse failed: \(error.localizedDescription)")
+                    return errorResult("anchor parse failed: \(error.localizedDescription)", code: .invalidInput)
                 }
             } else if let addrString = invocation.args["address"] as? String, let address = parseHexAddress(addrString) {
                 guard let node = engine.node(forSessionID: sessionID) else {
-                    return errorResult("no attached session for id \(sessionID)")
+                    return errorResult("no attached session for id \(sessionID)", code: .notFound)
                 }
                 anchor = node.anchor(for: address)
             } else {
-                return errorResult("must supply either 'address' or 'anchor'")
+                return errorResult("must supply either 'address' or 'anchor'", code: .invalidInput)
             }
 
             let title = (invocation.args["title"] as? String) ?? finding.title
@@ -2192,6 +2361,198 @@ public enum MissionTools {
         }
     }
 
+    // MARK: - list_address_insights / unpin_insight
+
+    private static func registerListAddressInsights(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "list_address_insights",
+            description: "List the address insights pinned in this session: id, kind (memory or disassembly), title, anchor display, byte count, and last resolved address. Use to revisit prior pins or pick stale ones for unpin_insight.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            let insights = engine.insightsBySession[sessionID] ?? []
+            let array: [[String: Any]] = insights.map { addressInsightJSON($0) }
+            return makeResult(jsonObject: array, summary: "\(array.count) insight\(array.count == 1 ? "" : "s")")
+        }
+    }
+
+    private static func registerUnpinInsight(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "unpin_insight",
+            description: "Remove a pinned address insight from the session sidebar. The underlying finding stays; only the persistent pin is removed.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"},"insight_id":{"type":"string"}},"required":["session_id","insight_id"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let idString = invocation.args["insight_id"] as? String,
+                let insightID = UUID(uuidString: idString)
+            else {
+                return errorResult("missing or invalid insight_id", code: .invalidInput)
+            }
+            guard (engine.insightsBySession[sessionID] ?? []).contains(where: { $0.id == insightID }) else {
+                return errorResult("no insight \(insightID) on session \(sessionID)", code: .notFound)
+            }
+            engine.deleteInsight(id: insightID, sessionID: sessionID)
+            let payload: [String: Any] = ["insight_id": insightID.uuidString, "removed": true]
+            return makeResult(jsonObject: payload, summary: "Unpinned insight \(insightID.uuidString.prefix(8))")
+        }
+    }
+
+    private static func registerReadWidgetState(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "read_widget_state",
+            description: "Read the current cached state of a widget on a running instrument instance. Returns graph series points, list items, table rows, counter value, histogram buckets, or hex bytes (base64) — whichever the widget is. Useful when an LLM-driven mission wants to inspect what its instrument has surfaced.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"},"instance_id":{"type":"string"},"widget":{"type":"string"}},"required":["session_id","instance_id","widget"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, parseSessionID(invocation.args) != nil else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let instanceIDStr = invocation.args["instance_id"] as? String,
+                let instanceID = UUID(uuidString: instanceIDStr)
+            else {
+                return errorResult("missing or invalid instance_id", code: .invalidInput)
+            }
+            guard let widgetID = invocation.args["widget"] as? String, !widgetID.isEmpty else {
+                return errorResult("missing widget", code: .invalidInput)
+            }
+            let state = engine.widgetState(instanceID: instanceID, widget: widgetID)
+            return makeResult(jsonObject: widgetStateJSON(state), summary: "Read state of widget \(widgetID)")
+        }
+    }
+
+    private static func widgetStateJSON(_ state: WidgetState) -> [String: Any] {
+        var points: [[String: Any]] = []
+        for (seriesID, seriesPoints) in state.graphSeries {
+            for point in seriesPoints {
+                points.append(["series": seriesID, "x": point.x, "y": point.y])
+            }
+        }
+        let items = state.listItems.map { item -> [String: Any] in
+            var obj: [String: Any] = ["id": item.id, "title": item.title]
+            if let s = item.subtitle { obj["subtitle"] = s }
+            if let a = item.accessory { obj["accessory"] = a }
+            return obj
+        }
+        let rows = state.tableRows.map { row -> [String: Any] in
+            ["id": row.id, "cells": row.cells]
+        }
+        let buckets = state.histogram.map { ["label": $0.label, "count": $0.count] }
+        var obj: [String: Any] = [
+            "points": points,
+            "items": items,
+            "rows": rows,
+            "buckets": buckets,
+        ]
+        if let counter = state.counter {
+            var counterObj: [String: Any] = ["value": counter.value]
+            if let unit = counter.unit { counterObj["unit"] = unit }
+            if let delta = counter.delta { counterObj["delta"] = delta }
+            obj["counter"] = counterObj
+        }
+        if let hex = state.hex {
+            obj["hex"] = [
+                "bytes": hex.bytes.base64EncodedString(),
+                "base_address": String(format: "0x%llx", hex.baseAddress),
+            ]
+        }
+        return obj
+    }
+
+    private static func registerInvokeWidgetAction(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "invoke_widget_action",
+            description: "Trigger a widget action (declared on a list or table widget). The instrument's onAction handler runs server-side. Use to programmatically click an action button on a row your instrument has surfaced.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"},"instance_id":{"type":"string"},"widget":{"type":"string"},"action":{"type":"string"},"item":{"type":"string","description":"Optional row/item id the action targets"}},"required":["session_id","instance_id","widget","action"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let instanceIDStr = invocation.args["instance_id"] as? String,
+                let instanceID = UUID(uuidString: instanceIDStr)
+            else {
+                return errorResult("missing or invalid instance_id", code: .invalidInput)
+            }
+            guard let widget = invocation.args["widget"] as? String, !widget.isEmpty,
+                let action = invocation.args["action"] as? String, !action.isEmpty
+            else {
+                return errorResult("missing widget or action", code: .invalidInput)
+            }
+            guard let instance = engine.instrumentsBySession[sessionID]?.first(where: { $0.id == instanceID }) else {
+                return errorResult("no instrument \(instanceID) on session \(sessionID)", code: .notFound)
+            }
+            let item = invocation.args["item"] as? String
+            await engine.invokeWidgetAction(instance: instance, widget: widget, action: action, item: item)
+            var payload: [String: Any] = [
+                "instance_id": instanceID.uuidString,
+                "widget": widget,
+                "action": action,
+            ]
+            if let item { payload["item"] = item }
+            return makeResult(jsonObject: payload, summary: "Invoked \(action) on \(widget)")
+        }
+    }
+
+    private static func registerDetachSession(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "detach_session",
+            description: "Drop a session entirely: detach Frida, dispose any attached instruments, and remove the session record from the project. Use to clean up sessions you created when a mission is finishing. Requires user approval.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard engine.sessions.contains(where: { $0.id == sessionID }) else {
+                return errorResult("no session with id \(sessionID)", code: .notFound)
+            }
+            engine.deleteSession(id: sessionID)
+            let payload: [String: Any] = ["session_id": sessionID.uuidString, "removed": true]
+            return makeResult(jsonObject: payload, summary: "Detached session \(sessionID.uuidString.prefix(8))")
+        }
+    }
+
+    private static func addressInsightJSON(_ insight: AddressInsight) -> [String: Any] {
+        var obj: [String: Any] = [
+            "id": insight.id.uuidString,
+            "title": insight.title,
+            "kind": insight.kind == .disassembly ? "disassembly" : "memory",
+            "anchor": insight.anchor.displayString,
+            "byte_count": insight.byteCount,
+            "created_at": ISO8601DateFormatter().string(from: insight.createdAt),
+        ]
+        if let addr = insight.lastResolvedAddress {
+            obj["last_resolved_address"] = String(format: "0x%llx", addr)
+        }
+        return obj
+    }
+
     // MARK: - request_user_input (act, answered via Engine.submitUserInputResponse)
 
     private static func registerRequestUserInput(in catalog: ToolCatalog) {
@@ -2205,7 +2566,7 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { _ in
-            errorResult("request_user_input must be answered via the Action Queue, not approved directly")
+            errorResult("request_user_input must be answered via the Action Queue, not approved directly", code: .rejected)
         }
     }
 
@@ -2232,6 +2593,21 @@ public enum MissionTools {
         return UInt64(trimmed)
     }
 
+    private static func parseHexBytes(_ s: String) -> [UInt8]? {
+        let trimmed = s.lowercased().hasPrefix("0x") ? String(s.dropFirst(2)) : s
+        guard trimmed.count % 2 == 0 else { return nil }
+        var result: [UInt8] = []
+        result.reserveCapacity(trimmed.count / 2)
+        var index = trimmed.startIndex
+        while index < trimmed.endIndex {
+            let next = trimmed.index(index, offsetBy: 2)
+            guard let byte = UInt8(trimmed[index..<next], radix: 16) else { return nil }
+            result.append(byte)
+            index = next
+        }
+        return result
+    }
+
     private static func makeResult(jsonObject: Any, summary: String) -> ActionResult {
         let data = (try? JSONSerialization.data(withJSONObject: jsonObject, options: [.sortedKeys])) ?? Data("{}".utf8)
         var json = String(data: data, encoding: .utf8) ?? "{}"
@@ -2242,8 +2618,17 @@ public enum MissionTools {
         return ActionResult(summary: summary, resultJSON: json)
     }
 
-    private static func errorResult(_ message: String) -> ActionResult {
-        ActionResult(summary: message, resultJSON: "{\"error\":\"\(escapeJSON(message))\"}", isError: true)
+    private static func errorResult(_ message: String, code: ToolErrorCode = .failed) -> ActionResult {
+        let json = "{\"error\":\"\(escapeJSON(message))\",\"code\":\"\(code.rawValue)\"}"
+        return ActionResult(summary: message, resultJSON: json, isError: true)
+    }
+
+    private enum ToolErrorCode: String {
+        case invalidInput = "invalid_input"
+        case notFound = "not_found"
+        case unavailable = "unavailable"
+        case rejected = "rejected"
+        case failed = "failed"
     }
 
     private enum ExplainOutcome {

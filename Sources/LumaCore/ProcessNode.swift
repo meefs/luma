@@ -821,6 +821,11 @@ public final class ProcessNode: Identifiable {
         return bytes
     }
 
+    public func writeRemoteMemory(at address: UInt64, bytes: [UInt8]) async throws {
+        let addr = String(format: "0x%llx", address)
+        _ = try await script.exports.writeMemory(addr, bytes)
+    }
+
     public func anchor(for address: UInt64) -> AddressAnchor {
         if let m = modules.first(where: { address >= $0.base && address < ($0.base + $0.size) }) {
             return .moduleOffset(name: m.name, offset: address - m.base)
