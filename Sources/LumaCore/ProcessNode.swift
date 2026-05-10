@@ -400,6 +400,36 @@ public final class ProcessNode: Identifiable {
                 _widgetUpdates.yield(update)
                 return true
 
+            case "widget-table-upsert":
+                guard let update = decodeTableUpsertUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-table-remove":
+                guard let update = decodeTableRemoveUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-counter-set":
+                guard let update = decodeCounterSetUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-histogram-set":
+                guard let update = decodeHistogramSetUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-histogram-increment":
+                guard let update = decodeHistogramIncrementUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-hex-set":
+                guard let update = decodeHexSetUpdate(dict, data: data) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
             case "widget-clear":
                 guard let update = decodeClearUpdate(dict) else { return false }
                 _widgetUpdates.yield(update)
@@ -468,6 +498,87 @@ public final class ProcessNode: Identifiable {
             let itemID = dict["item"] as? String
         else { return nil }
         return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .listRemove(itemID: itemID))
+    }
+
+    private func decodeTableUpsertUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let rowObj = dict["row"] as? [String: Any],
+            let id = rowObj["id"] as? String,
+            let cells = rowObj["cells"] as? [String: String]
+        else { return nil }
+        return WidgetUpdate(
+            instanceID: context.instanceID,
+            widget: context.widget,
+            kind: .tableUpsert(WidgetTableRow(id: id, cells: cells))
+        )
+    }
+
+    private func decodeTableRemoveUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let rowID = dict["row"] as? String
+        else { return nil }
+        return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .tableRemove(rowID: rowID))
+    }
+
+    private func decodeCounterSetUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let counterObj = dict["counter"] as? [String: Any],
+            let value = decodeNumber(counterObj["value"])
+        else { return nil }
+        return WidgetUpdate(
+            instanceID: context.instanceID,
+            widget: context.widget,
+            kind: .counterSet(WidgetCounterValue(
+                value: value,
+                unit: counterObj["unit"] as? String,
+                delta: decodeNumber(counterObj["delta"])
+            ))
+        )
+    }
+
+    private func decodeHistogramSetUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let bucketArr = dict["buckets"] as? [[String: Any]]
+        else { return nil }
+        let buckets = bucketArr.compactMap { obj -> WidgetHistogramBucket? in
+            guard let label = obj["label"] as? String,
+                let count = decodeNumber(obj["count"])
+            else { return nil }
+            return WidgetHistogramBucket(label: label, count: count)
+        }
+        return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .histogramSet(buckets))
+    }
+
+    private func decodeHistogramIncrementUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let label = dict["label"] as? String,
+            let by = decodeNumber(dict["by"])
+        else { return nil }
+        return WidgetUpdate(
+            instanceID: context.instanceID,
+            widget: context.widget,
+            kind: .histogramIncrement(label: label, by: by)
+        )
+    }
+
+    private func decodeHexSetUpdate(_ dict: [String: Any], data: [UInt8]?) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict) else { return nil }
+        let bytes: Data
+        if let data {
+            bytes = Data(data)
+        } else if let b64 = (dict["hex"] as? [String: Any])?["bytes"] as? String,
+            let decoded = Data(base64Encoded: b64)
+        {
+            bytes = decoded
+        } else {
+            return nil
+        }
+        let baseAddress: UInt64 = ((dict["hex"] as? [String: Any])?["base_address"] as? NSNumber)?.uint64Value ?? 0
+        return WidgetUpdate(
+            instanceID: context.instanceID,
+            widget: context.widget,
+            kind: .hexSet(WidgetHexState(bytes: bytes, baseAddress: baseAddress))
+        )
     }
 
     private func decodeClearUpdate(_ dict: [String: Any]) -> WidgetUpdate? {

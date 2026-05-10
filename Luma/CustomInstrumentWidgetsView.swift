@@ -168,7 +168,7 @@ struct CustomInstrumentWidgetsPopover: View {
 private enum NewWidgetField: Hashable { case id, name }
 
 enum WidgetKindChoice: String, CaseIterable, Identifiable {
-    case graph, list
+    case graph, list, table, counter, histogram, hex
 
     var id: String { rawValue }
 
@@ -176,6 +176,10 @@ enum WidgetKindChoice: String, CaseIterable, Identifiable {
         switch self {
         case .graph: return "Graph"
         case .list: return "List"
+        case .table: return "Table"
+        case .counter: return "Counter"
+        case .histogram: return "Histogram"
+        case .hex: return "Hex Dump"
         }
     }
 
@@ -183,6 +187,10 @@ enum WidgetKindChoice: String, CaseIterable, Identifiable {
         switch kind {
         case .graph: self = .graph
         case .list: self = .list
+        case .table: self = .table
+        case .counter: self = .counter
+        case .histogram: self = .histogram
+        case .hex: self = .hex
         }
     }
 
@@ -190,6 +198,10 @@ enum WidgetKindChoice: String, CaseIterable, Identifiable {
         switch self {
         case .graph: return .graph(InstrumentWidget.GraphConfig())
         case .list: return .list(InstrumentWidget.ListConfig())
+        case .table: return .table(InstrumentWidget.TableConfig())
+        case .counter: return .counter(InstrumentWidget.CounterConfig())
+        case .histogram: return .histogram(InstrumentWidget.HistogramConfig())
+        case .hex: return .hex(InstrumentWidget.HexConfig())
         }
     }
 }
@@ -271,6 +283,23 @@ private struct WidgetRow: View {
                 capRow(label: "Max items", binding: listMaxItemsBinding)
                 ListActionsEditor(actions: listActionsBinding)
             }
+        case .table:
+            VStack(alignment: .leading, spacing: 8) {
+                capRow(label: "Max rows", binding: tableMaxRowsBinding)
+                TableColumnsEditor(columns: tableColumnsBinding)
+                ListActionsEditor(actions: tableActionsBinding)
+            }
+        case .counter:
+            HStack(spacing: 8) {
+                Text("Unit").font(.subheadline).frame(width: 160, alignment: .leading)
+                TextField("(optional)", text: counterUnitBinding)
+                    .textFieldStyle(.roundedBorder)
+                Spacer()
+            }
+        case .histogram:
+            capRow(label: "Max buckets", binding: histogramMaxBucketsBinding)
+        case .hex:
+            capRow(label: "Max bytes", binding: hexMaxBytesBinding)
         }
     }
 
@@ -309,6 +338,96 @@ private struct WidgetRow: View {
                 if case .list(var cfg) = widget.kind {
                     cfg.maxItems = max(1, newValue)
                     widget.kind = .list(cfg)
+                }
+            }
+        )
+    }
+
+    private var tableMaxRowsBinding: Binding<Int> {
+        Binding(
+            get: {
+                if case .table(let cfg) = widget.kind { return cfg.maxRows }
+                return InstrumentWidget.TableConfig.defaultMaxRows
+            },
+            set: { newValue in
+                if case .table(var cfg) = widget.kind {
+                    cfg.maxRows = max(1, newValue)
+                    widget.kind = .table(cfg)
+                }
+            }
+        )
+    }
+
+    private var tableColumnsBinding: Binding<[InstrumentWidget.Column]> {
+        Binding(
+            get: {
+                if case .table(let cfg) = widget.kind { return cfg.columns }
+                return []
+            },
+            set: { newValue in
+                if case .table(var cfg) = widget.kind {
+                    cfg.columns = newValue
+                    widget.kind = .table(cfg)
+                }
+            }
+        )
+    }
+
+    private var tableActionsBinding: Binding<[InstrumentWidget.Action]> {
+        Binding(
+            get: {
+                if case .table(let cfg) = widget.kind { return cfg.actions }
+                return []
+            },
+            set: { newValue in
+                if case .table(var cfg) = widget.kind {
+                    cfg.actions = newValue
+                    widget.kind = .table(cfg)
+                }
+            }
+        )
+    }
+
+    private var counterUnitBinding: Binding<String> {
+        Binding(
+            get: {
+                if case .counter(let cfg) = widget.kind { return cfg.unit ?? "" }
+                return ""
+            },
+            set: { newValue in
+                if case .counter(var cfg) = widget.kind {
+                    cfg.unit = newValue.isEmpty ? nil : newValue
+                    widget.kind = .counter(cfg)
+                }
+            }
+        )
+    }
+
+    private var histogramMaxBucketsBinding: Binding<Int> {
+        Binding(
+            get: {
+                if case .histogram(let cfg) = widget.kind { return cfg.maxBuckets }
+                return InstrumentWidget.HistogramConfig.defaultMaxBuckets
+            },
+            set: { newValue in
+                if case .histogram(var cfg) = widget.kind {
+                    cfg.maxBuckets = max(1, newValue)
+                    widget.kind = .histogram(cfg)
+                }
+            }
+        )
+    }
+
+    private var hexMaxBytesBinding: Binding<Int> {
+        Binding(
+            get: {
+                if case .hex(let cfg) = widget.kind { return cfg.maxBytes }
+                return InstrumentWidget.HexConfig.defaultMaxBytes
+            },
+            set: { newValue in
+                if case .hex(var cfg) = widget.kind {
+                    cfg.maxBytes = max(1, newValue)
+                    widget.kind = .hex(cfg)
                 }
             }
         )
@@ -433,6 +552,104 @@ private struct GraphSeriesEditor: View {
         Binding(
             get: { i < series.count ? series[i].name : "" },
             set: { if i < series.count { series[i].name = $0 } }
+        )
+    }
+}
+
+private struct TableColumnsEditor: View {
+    @Binding var columns: [InstrumentWidget.Column]
+    @State private var draftID: String = ""
+    @State private var draftName: String = ""
+    @State private var nameAutoFilled: Bool = true
+    @FocusState private var focus: ChildFocus?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Columns").font(.caption).foregroundStyle(.secondary)
+            ForEach(columns.indices, id: \.self) { i in
+                HStack(spacing: 6) {
+                    TextField("id", text: idBinding(at: i))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                    TextField("Name", text: nameBinding(at: i))
+                        .textFieldStyle(.roundedBorder)
+                    Picker("", selection: alignmentBinding(at: i)) {
+                        Text("Leading").tag(InstrumentWidget.Column.Alignment.leading)
+                        Text("Trailing").tag(InstrumentWidget.Column.Alignment.trailing)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 100)
+                    Button { columns.remove(at: i) } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("id", text: $draftID)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 110)
+                    .focused($focus, equals: .id)
+                    .onChange(of: draftID) { _, newValue in applyIDChange(newValue) }
+                    .onSubmit(append)
+                TextField("Name", text: $draftName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focus, equals: .name)
+                    .onChange(of: draftName) { _, newValue in
+                        if newValue != CamelCase.humanized(draftID) { nameAutoFilled = false }
+                    }
+                    .onSubmit(append)
+                Button { append() } label: { Image(systemName: "plus.circle") }
+                    .buttonStyle(.borderless)
+                    .disabled(addDisabled)
+            }
+        }
+    }
+
+    private var addDisabled: Bool {
+        draftID.trimmingCharacters(in: .whitespaces).isEmpty
+            || draftName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func applyIDChange(_ newValue: String) {
+        let lowered = CamelCase.sanitized(newValue)
+        if lowered != newValue {
+            draftID = lowered
+            return
+        }
+        if nameAutoFilled {
+            draftName = CamelCase.humanized(lowered)
+        }
+    }
+
+    private func append() {
+        let id = draftID.trimmingCharacters(in: .whitespaces)
+        let name = draftName.trimmingCharacters(in: .whitespaces)
+        guard !id.isEmpty, !name.isEmpty, !columns.contains(where: { $0.id == id }) else { return }
+        columns.append(InstrumentWidget.Column(id: id, name: name))
+        draftID = ""
+        draftName = ""
+        nameAutoFilled = true
+        focus = .id
+    }
+
+    private func idBinding(at i: Int) -> Binding<String> {
+        Binding(
+            get: { i < columns.count ? columns[i].id : "" },
+            set: { if i < columns.count { columns[i].id = $0 } }
+        )
+    }
+
+    private func nameBinding(at i: Int) -> Binding<String> {
+        Binding(
+            get: { i < columns.count ? columns[i].name : "" },
+            set: { if i < columns.count { columns[i].name = $0 } }
+        )
+    }
+
+    private func alignmentBinding(at i: Int) -> Binding<InstrumentWidget.Column.Alignment> {
+        Binding(
+            get: { i < columns.count ? columns[i].alignment : .leading },
+            set: { if i < columns.count { columns[i].alignment = $0 } }
         )
     }
 }

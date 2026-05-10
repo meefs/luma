@@ -246,13 +246,38 @@ public enum CustomInstrumentTypings {
             clear(): void;
         }
 
+        declare interface CustomInstrumentTableWidget<Column extends string, Action extends string> {
+            upsertRow(row: { id: string, cells: { [K in Column]: string } }): void;
+            removeRow(id: string): void;
+            clear(): void;
+        }
+
+        declare interface CustomInstrumentCounterWidget {
+            setCounter(value: { value: number, unit?: string, delta?: number }): void;
+            clear(): void;
+        }
+
+        declare interface CustomInstrumentHistogramWidget {
+            setHistogram(buckets: Array<{ label: string, count: number }>): void;
+            incrementBucket(label: string, by?: number): void;
+            clear(): void;
+        }
+
+        declare interface CustomInstrumentHexWidget {
+            setHex(state: { bytes: ArrayBuffer | number[], baseAddress?: number | string }): void;
+            clear(): void;
+        }
+
         declare interface CustomInstrumentWidgetMap {
         }
 
         declare type CustomInstrumentAction = {
-            [K in keyof CustomInstrumentWidgetMap]: CustomInstrumentWidgetMap[K] extends CustomInstrumentListWidget<infer A>
-                ? { widget: K; action: A; item: string }
-                : never
+            [K in keyof CustomInstrumentWidgetMap]:
+                CustomInstrumentWidgetMap[K] extends CustomInstrumentListWidget<infer A>
+                    ? { widget: K; action: A; item: string }
+                : CustomInstrumentWidgetMap[K] extends CustomInstrumentTableWidget<any, infer A>
+                    ? { widget: K; action: A; item: string }
+                    : never
         }[keyof CustomInstrumentWidgetMap];
 
         declare type CustomFeatureValue = boolean | number | string | CustomFeatureValue[] | { [name: string]: CustomFeatureValue };
@@ -276,6 +301,22 @@ public enum CustomInstrumentTypings {
 
         declare interface CustomInstrumentListSnapshot {
             items: Array<{ id: string; title: string; subtitle?: string; accessory?: string }>;
+        }
+
+        declare interface CustomInstrumentTableSnapshot<Column extends string> {
+            rows: Array<{ id: string; cells: { [K in Column]: string } }>;
+        }
+
+        declare interface CustomInstrumentCounterSnapshot {
+            counter: { value: number; unit?: string; delta?: number } | null;
+        }
+
+        declare interface CustomInstrumentHistogramSnapshot {
+            buckets: Array<{ label: string; count: number }>;
+        }
+
+        declare interface CustomInstrumentHexSnapshot {
+            hex: { bytes: string; base_address: number } | null;
         }
 
         declare interface CustomInstrumentRestoredState {
@@ -355,6 +396,14 @@ public enum CustomInstrumentTypings {
             return "CustomInstrumentGraphWidget<\(stringLiteralUnion(cfg.series.map(\.id)))>"
         case .list(let cfg):
             return "CustomInstrumentListWidget<\(stringLiteralUnion(cfg.actions.map(\.id)))>"
+        case .table(let cfg):
+            return "CustomInstrumentTableWidget<\(stringLiteralUnion(cfg.columns.map(\.id))), \(stringLiteralUnion(cfg.actions.map(\.id)))>"
+        case .counter:
+            return "CustomInstrumentCounterWidget"
+        case .histogram:
+            return "CustomInstrumentHistogramWidget"
+        case .hex:
+            return "CustomInstrumentHexWidget"
         }
     }
 
@@ -364,6 +413,14 @@ public enum CustomInstrumentTypings {
             return "CustomInstrumentGraphSnapshot<\(stringLiteralUnion(cfg.series.map(\.id)))>"
         case .list:
             return "CustomInstrumentListSnapshot"
+        case .table(let cfg):
+            return "CustomInstrumentTableSnapshot<\(stringLiteralUnion(cfg.columns.map(\.id)))>"
+        case .counter:
+            return "CustomInstrumentCounterSnapshot"
+        case .histogram:
+            return "CustomInstrumentHistogramSnapshot"
+        case .hex:
+            return "CustomInstrumentHexSnapshot"
         }
     }
 

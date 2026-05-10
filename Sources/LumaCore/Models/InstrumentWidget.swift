@@ -28,6 +28,10 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
         case graph(GraphConfig)
         case list(ListConfig)
+        case table(TableConfig)
+        case counter(CounterConfig)
+        case histogram(HistogramConfig)
+        case hex(HexConfig)
     }
 
     public struct GraphConfig: Codable, Sendable, Equatable {
@@ -64,6 +68,65 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
         }
     }
 
+    public struct TableConfig: Codable, Sendable, Equatable {
+        public static let defaultMaxRows: Int = 1_000
+
+        public var columns: [Column]
+        public var actions: [Action]
+        public var maxRows: Int
+
+        public init(columns: [Column] = [], actions: [Action] = [], maxRows: Int = Self.defaultMaxRows) {
+            self.columns = columns
+            self.actions = actions
+            self.maxRows = maxRows
+        }
+    }
+
+    public struct Column: Codable, Identifiable, Sendable, Equatable {
+        public enum Alignment: String, Codable, Sendable, CaseIterable {
+            case leading
+            case trailing
+        }
+
+        public var id: String
+        public var name: String
+        public var alignment: Alignment
+
+        public init(id: String, name: String, alignment: Alignment = .leading) {
+            self.id = id
+            self.name = name
+            self.alignment = alignment
+        }
+    }
+
+    public struct CounterConfig: Codable, Sendable, Equatable {
+        public var unit: String?
+
+        public init(unit: String? = nil) {
+            self.unit = unit
+        }
+    }
+
+    public struct HistogramConfig: Codable, Sendable, Equatable {
+        public static let defaultMaxBuckets: Int = 100
+
+        public var maxBuckets: Int
+
+        public init(maxBuckets: Int = Self.defaultMaxBuckets) {
+            self.maxBuckets = maxBuckets
+        }
+    }
+
+    public struct HexConfig: Codable, Sendable, Equatable {
+        public static let defaultMaxBytes: Int = 16_384
+
+        public var maxBytes: Int
+
+        public init(maxBytes: Int = Self.defaultMaxBytes) {
+            self.maxBytes = maxBytes
+        }
+    }
+
     public struct Action: Codable, Identifiable, Sendable, Equatable {
         public var id: String
         public var name: String
@@ -77,7 +140,7 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
 
 extension InstrumentWidget.Kind: Codable {
     private enum CodingKeys: String, CodingKey { case kind, config }
-    private enum Tag: String, Codable { case graph, list }
+    private enum Tag: String, Codable { case graph, list, table, counter, histogram, hex }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -86,6 +149,14 @@ extension InstrumentWidget.Kind: Codable {
             self = .graph(try c.decode(InstrumentWidget.GraphConfig.self, forKey: .config))
         case .list:
             self = .list(try c.decode(InstrumentWidget.ListConfig.self, forKey: .config))
+        case .table:
+            self = .table(try c.decode(InstrumentWidget.TableConfig.self, forKey: .config))
+        case .counter:
+            self = .counter(try c.decode(InstrumentWidget.CounterConfig.self, forKey: .config))
+        case .histogram:
+            self = .histogram(try c.decode(InstrumentWidget.HistogramConfig.self, forKey: .config))
+        case .hex:
+            self = .hex(try c.decode(InstrumentWidget.HexConfig.self, forKey: .config))
         }
     }
 
@@ -98,6 +169,18 @@ extension InstrumentWidget.Kind: Codable {
         case .list(let l):
             try c.encode(Tag.list, forKey: .kind)
             try c.encode(l, forKey: .config)
+        case .table(let t):
+            try c.encode(Tag.table, forKey: .kind)
+            try c.encode(t, forKey: .config)
+        case .counter(let cfg):
+            try c.encode(Tag.counter, forKey: .kind)
+            try c.encode(cfg, forKey: .config)
+        case .histogram(let h):
+            try c.encode(Tag.histogram, forKey: .kind)
+            try c.encode(h, forKey: .config)
+        case .hex(let h):
+            try c.encode(Tag.hex, forKey: .kind)
+            try c.encode(h, forKey: .config)
         }
     }
 }

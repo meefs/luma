@@ -2746,6 +2746,34 @@ public final class Engine {
                     return obj
                 }
                 restored[widget.id] = ["items": items]
+            case .table:
+                let rows = state.tableRows.map { row -> [String: Any] in
+                    ["id": row.id, "cells": row.cells]
+                }
+                restored[widget.id] = ["rows": rows]
+            case .counter:
+                if let counter = state.counter {
+                    var obj: [String: Any] = ["value": counter.value]
+                    if let unit = counter.unit { obj["unit"] = unit }
+                    if let delta = counter.delta { obj["delta"] = delta }
+                    restored[widget.id] = ["counter": obj]
+                } else {
+                    restored[widget.id] = ["counter": NSNull()]
+                }
+            case .histogram:
+                let buckets = state.histogram.map { ["label": $0.label, "count": $0.count] }
+                restored[widget.id] = ["buckets": buckets]
+            case .hex:
+                if let hex = state.hex {
+                    restored[widget.id] = [
+                        "hex": [
+                            "bytes": hex.bytes.base64EncodedString(),
+                            "base_address": hex.baseAddress,
+                        ],
+                    ]
+                } else {
+                    restored[widget.id] = ["hex": NSNull()]
+                }
             }
         }
         return restored

@@ -1805,7 +1805,7 @@ public enum MissionTools {
     }
 
     private static let widgetsSchemaJSON: String = """
-        {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"kind":{"type":"string","enum":["graph","list"]},"persistence":{"type":"string","enum":["none","session"],"default":"none","description":"'none' = data lives in memory, lost on detach. 'session' = data survives reattach and app restart, replayed to create() via the `restored` argument."},"max_points":{"type":"integer","minimum":1,"default":5000,"description":"For kind=graph: rolling cap per series. Oldest points drop when exceeded."},"max_items":{"type":"integer","minimum":1,"default":1000,"description":"For kind=list: rolling cap. Oldest items drop when exceeded."},"series":{"type":"array","description":"For kind=graph: line series the agent will push points to.","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id","name"],"additionalProperties":false}},"actions":{"type":"array","description":"For kind=list: per-item action buttons; clicks invoke onAction with {widget,action,item}.","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id","name"],"additionalProperties":false}}},"required":["id","name","kind"],"additionalProperties":false}}
+        {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"kind":{"type":"string","enum":["graph","list","table","counter","histogram","hex"]},"persistence":{"type":"string","enum":["none","session"],"default":"none","description":"'none' = data lives in memory, lost on detach. 'session' = data survives reattach and app restart, replayed to create() via the `restored` argument."},"max_points":{"type":"integer","minimum":1,"default":5000,"description":"For kind=graph: rolling cap per series. Oldest points drop when exceeded."},"max_items":{"type":"integer","minimum":1,"default":1000,"description":"For kind=list: rolling cap. Oldest items drop when exceeded."},"max_rows":{"type":"integer","minimum":1,"default":1000,"description":"For kind=table: rolling cap on rows."},"max_buckets":{"type":"integer","minimum":1,"default":100,"description":"For kind=histogram: rolling cap on bucket count."},"max_bytes":{"type":"integer","minimum":1,"default":16384,"description":"For kind=hex: trailing-window cap on bytes shown."},"unit":{"type":"string","description":"For kind=counter: optional default unit label rendered next to the value."},"series":{"type":"array","description":"For kind=graph: line series the agent will push points to.","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id","name"],"additionalProperties":false}},"columns":{"type":"array","description":"For kind=table: ordered columns; each row's cells map column id to string.","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"alignment":{"type":"string","enum":["leading","trailing"],"default":"leading"}},"required":["id","name"],"additionalProperties":false}},"actions":{"type":"array","description":"For kind=list/table: per-item action buttons; clicks invoke onAction with {widget,action,item}.","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id","name"],"additionalProperties":false}}},"required":["id","name","kind"],"additionalProperties":false}}
         """
 
     private static func parseWidgetsArg(_ raw: Any?) -> [InstrumentWidget] {
@@ -1823,6 +1823,18 @@ public enum MissionTools {
             case "list":
                 let cfg = parseListConfigArg(actionsRaw: obj["actions"], maxItemsRaw: obj["max_items"])
                 return InstrumentWidget(id: id, name: name, kind: .list(cfg), persistence: persistence)
+            case "table":
+                let cfg = parseTableConfigArg(columnsRaw: obj["columns"], actionsRaw: obj["actions"], maxRowsRaw: obj["max_rows"])
+                return InstrumentWidget(id: id, name: name, kind: .table(cfg), persistence: persistence)
+            case "counter":
+                let cfg = InstrumentWidget.CounterConfig(unit: obj["unit"] as? String)
+                return InstrumentWidget(id: id, name: name, kind: .counter(cfg), persistence: persistence)
+            case "histogram":
+                let maxBuckets = (obj["max_buckets"] as? Int) ?? InstrumentWidget.HistogramConfig.defaultMaxBuckets
+                return InstrumentWidget(id: id, name: name, kind: .histogram(InstrumentWidget.HistogramConfig(maxBuckets: max(1, maxBuckets))), persistence: persistence)
+            case "hex":
+                let maxBytes = (obj["max_bytes"] as? Int) ?? InstrumentWidget.HexConfig.defaultMaxBytes
+                return InstrumentWidget(id: id, name: name, kind: .hex(InstrumentWidget.HexConfig(maxBytes: max(1, maxBytes))), persistence: persistence)
             default:
                 return nil
             }
@@ -1847,6 +1859,22 @@ public enum MissionTools {
         }
         let maxItems = (maxItemsRaw as? Int) ?? InstrumentWidget.ListConfig.defaultMaxItems
         return InstrumentWidget.ListConfig(actions: actions, maxItems: max(1, maxItems))
+    }
+
+    private static func parseTableConfigArg(columnsRaw: Any?, actionsRaw: Any?, maxRowsRaw: Any?) -> InstrumentWidget.TableConfig {
+        let columnEntries = (columnsRaw as? [[String: Any]]) ?? []
+        let columns = columnEntries.compactMap { obj -> InstrumentWidget.Column? in
+            guard let cid = obj["id"] as? String, let cname = obj["name"] as? String else { return nil }
+            let alignment = (obj["alignment"] as? String).flatMap(InstrumentWidget.Column.Alignment.init(rawValue:)) ?? .leading
+            return InstrumentWidget.Column(id: cid, name: cname, alignment: alignment)
+        }
+        let actionEntries = (actionsRaw as? [[String: Any]]) ?? []
+        let actions = actionEntries.compactMap { obj -> InstrumentWidget.Action? in
+            guard let aid = obj["id"] as? String, let aname = obj["name"] as? String else { return nil }
+            return InstrumentWidget.Action(id: aid, name: aname)
+        }
+        let maxRows = (maxRowsRaw as? Int) ?? InstrumentWidget.TableConfig.defaultMaxRows
+        return InstrumentWidget.TableConfig(columns: columns, actions: actions, maxRows: max(1, maxRows))
     }
 
     private static func customInstrumentJSON(def: CustomInstrumentDef) -> [String: Any] {
@@ -1883,6 +1911,20 @@ public enum MissionTools {
             obj["kind"] = "list"
             obj["actions"] = cfg.actions.map { ["id": $0.id, "name": $0.name] }
             obj["max_items"] = cfg.maxItems
+        case .table(let cfg):
+            obj["kind"] = "table"
+            obj["columns"] = cfg.columns.map { ["id": $0.id, "name": $0.name, "alignment": $0.alignment.rawValue] }
+            obj["actions"] = cfg.actions.map { ["id": $0.id, "name": $0.name] }
+            obj["max_rows"] = cfg.maxRows
+        case .counter(let cfg):
+            obj["kind"] = "counter"
+            if let unit = cfg.unit { obj["unit"] = unit }
+        case .histogram(let cfg):
+            obj["kind"] = "histogram"
+            obj["max_buckets"] = cfg.maxBuckets
+        case .hex(let cfg):
+            obj["kind"] = "hex"
+            obj["max_bytes"] = cfg.maxBytes
         }
         return obj
     }

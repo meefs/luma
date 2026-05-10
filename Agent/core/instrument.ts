@@ -19,6 +19,12 @@ export interface WidgetHandle {
     push(point: GraphPoint): void;
     upsertItem(item: ListItem): void;
     removeItem(id: string): void;
+    upsertRow(row: TableRow): void;
+    removeRow(id: string): void;
+    setCounter(value: CounterValue): void;
+    setHistogram(buckets: HistogramBucket[]): void;
+    incrementBucket(label: string, by?: number): void;
+    setHex(state: HexValue): void;
     clear(): void;
 }
 
@@ -33,6 +39,27 @@ export interface ListItem {
     title: string;
     subtitle?: string;
     accessory?: string;
+}
+
+export interface TableRow {
+    id: string;
+    cells: { [columnId: string]: string };
+}
+
+export interface CounterValue {
+    value: number;
+    unit?: string;
+    delta?: number;
+}
+
+export interface HistogramBucket {
+    label: string;
+    count: number;
+}
+
+export interface HexValue {
+    bytes: ArrayBuffer | number[];
+    baseAddress?: number | string;
 }
 
 export interface WidgetAction {
@@ -149,6 +176,25 @@ function makeInstrumentContext(instanceId: string): InstrumentContext {
                 },
                 removeItem(itemId) {
                     post("widget-list-remove", { widget: id, item: itemId });
+                },
+                upsertRow(row) {
+                    post("widget-table-upsert", { widget: id, row });
+                },
+                removeRow(rowId) {
+                    post("widget-table-remove", { widget: id, row: rowId });
+                },
+                setCounter(value) {
+                    post("widget-counter-set", { widget: id, counter: value });
+                },
+                setHistogram(buckets) {
+                    post("widget-histogram-set", { widget: id, buckets });
+                },
+                incrementBucket(label, by = 1) {
+                    post("widget-histogram-increment", { widget: id, label, by });
+                },
+                setHex(state) {
+                    const data = state.bytes instanceof ArrayBuffer ? state.bytes : new Uint8Array(state.bytes).buffer;
+                    post("widget-hex-set", { widget: id, hex: { base_address: state.baseAddress ?? 0 } }, data);
                 },
                 clear() {
                     post("widget-clear", { widget: id });

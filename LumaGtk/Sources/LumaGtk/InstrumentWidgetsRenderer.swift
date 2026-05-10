@@ -3,6 +3,7 @@ import CGtk
 import Foundation
 import Gtk
 import LumaCore
+import Pango
 
 @MainActor
 final class InstrumentWidgetsRenderer {
@@ -80,6 +81,10 @@ private final class WidgetCanvas {
     private let onAction: (_ action: String, _ item: String?) -> Void
     private var graphView: GraphView?
     private var listView: ListView?
+    private var tableView: TableView?
+    private var counterView: CounterView?
+    private var histogramView: HistogramView?
+    private var hexView: HexValueView?
 
     init(
         definition: InstrumentWidget,
@@ -125,6 +130,22 @@ private final class WidgetCanvas {
             let view = ListView(actions: cfg.actions, initialItems: snapshot.listItems, onAction: onAction)
             listView = view
             column.append(child: view.widget)
+        case .table(let cfg):
+            let view = TableView(columns: cfg.columns, actions: cfg.actions, initialRows: snapshot.tableRows, onAction: onAction)
+            tableView = view
+            column.append(child: view.widget)
+        case .counter(let cfg):
+            let view = CounterView(unit: cfg.unit, initial: snapshot.counter)
+            counterView = view
+            column.append(child: view.widget)
+        case .histogram:
+            let view = HistogramView(initial: snapshot.histogram)
+            histogramView = view
+            column.append(child: view.widget)
+        case .hex:
+            let view = HexValueView(initial: snapshot.hex)
+            hexView = view
+            column.append(child: view.widget)
         }
     }
 
@@ -136,9 +157,25 @@ private final class WidgetCanvas {
             listView?.upsert(item: item)
         case .listRemove(let id):
             listView?.remove(itemID: id)
+        case .tableUpsert(let row):
+            tableView?.upsert(row: row)
+        case .tableRemove(let id):
+            tableView?.remove(rowID: id)
+        case .counterSet(let value):
+            counterView?.set(value: value)
+        case .histogramSet(let buckets):
+            histogramView?.setBuckets(buckets)
+        case .histogramIncrement(let label, let by):
+            histogramView?.increment(label: label, by: by)
+        case .hexSet(let state):
+            hexView?.set(state: state)
         case .clear:
             graphView?.clear()
             listView?.clear()
+            tableView?.clear()
+            counterView?.clear()
+            histogramView?.clear()
+            hexView?.clear()
         }
     }
 }
@@ -372,5 +409,316 @@ private final class ListView {
         }
 
         return row
+    }
+}
+
+@MainActor
+private final class TableView {
+    let widget: Box
+    private let columns: [InstrumentWidget.Column]
+    private let actions: [InstrumentWidget.Action]
+    private let onAction: (_ action: String, _ item: String?) -> Void
+    private let body: Box
+    private var rowsByID: [String: Box] = [:]
+    private var orderedIDs: [String] = []
+    private let emptyLabel: Label
+
+    init(columns: [InstrumentWidget.Column], actions: [InstrumentWidget.Action], initialRows: [WidgetTableRow], onAction: @escaping (_ action: String, _ item: String?) -> Void) {
+        self.columns = columns
+        self.actions = actions
+        self.onAction = onAction
+
+        widget = Box(orientation: .vertical, spacing: 0)
+        widget.add(cssClass: "boxed-list")
+
+        let header = Box(orientation: .horizontal, spacing: 8)
+        header.marginStart = 8
+        header.marginEnd = 8
+        header.marginTop = 6
+        header.marginBottom = 6
+        for column in columns {
+            let label = Label(str: column.name)
+            label.hexpand = true
+            label.halign = column.alignment == .leading ? .start : .end
+            label.add(cssClass: "caption")
+            label.add(cssClass: "dim-label")
+            header.append(child: label)
+        }
+        widget.append(child: header)
+
+        body = Box(orientation: .vertical, spacing: 0)
+        widget.append(child: body)
+
+        emptyLabel = Label(str: "No rows.")
+        emptyLabel.add(cssClass: "dim-label")
+        emptyLabel.halign = .start
+        emptyLabel.marginStart = 8
+        emptyLabel.marginEnd = 8
+        emptyLabel.marginTop = 6
+        emptyLabel.marginBottom = 6
+        widget.append(child: emptyLabel)
+
+        for row in initialRows {
+            upsert(row: row)
+        }
+        refreshVisibility()
+    }
+
+    func upsert(row: WidgetTableRow) {
+        if let existing = rowsByID[row.id] {
+            body.remove(child: existing)
+            let replacement = makeRow(row)
+            rowsByID[row.id] = replacement
+            body.append(child: replacement)
+        } else {
+            let widget = makeRow(row)
+            rowsByID[row.id] = widget
+            orderedIDs.append(row.id)
+            body.append(child: widget)
+        }
+        refreshVisibility()
+    }
+
+    func remove(rowID: String) {
+        guard let row = rowsByID.removeValue(forKey: rowID) else { return }
+        orderedIDs.removeAll { $0 == rowID }
+        body.remove(child: row)
+        refreshVisibility()
+    }
+
+    func clear() {
+        for id in orderedIDs {
+            if let row = rowsByID[id] { body.remove(child: row) }
+        }
+        rowsByID.removeAll()
+        orderedIDs.removeAll()
+        refreshVisibility()
+    }
+
+    private func refreshVisibility() {
+        let isEmpty = orderedIDs.isEmpty
+        body.visible = !isEmpty
+        emptyLabel.visible = isEmpty
+    }
+
+    private func makeRow(_ row: WidgetTableRow) -> Box {
+        let container = Box(orientation: .horizontal, spacing: 8)
+        container.marginStart = 8
+        container.marginEnd = 8
+        container.marginTop = 4
+        container.marginBottom = 4
+        for column in columns {
+            let label = Label(str: row.cells[column.id] ?? "")
+            label.hexpand = true
+            label.halign = column.alignment == .leading ? .start : .end
+            label.ellipsize = EllipsizeMode.end
+            container.append(child: label)
+        }
+        let rowID = row.id
+        for action in actions {
+            let button = Button(label: action.name)
+            button.add(cssClass: "flat")
+            let actionID = action.id
+            button.onClicked { [weak self] _ in
+                MainActor.assumeIsolated { self?.onAction(actionID, rowID) }
+            }
+            container.append(child: button)
+        }
+        return container
+    }
+}
+
+@MainActor
+private final class CounterView {
+    let widget: Box
+    private let unitFromConfig: String?
+    private let valueRow: Box
+    private let valueLabel: Label
+    private let unitLabel: Label
+    private let deltaLabel: Label
+    private let emptyLabel: Label
+
+    init(unit: String?, initial: WidgetCounterValue?) {
+        self.unitFromConfig = unit
+
+        widget = Box(orientation: .vertical, spacing: 0)
+
+        valueRow = Box(orientation: .horizontal, spacing: 8)
+        valueRow.valign = .center
+
+        valueLabel = Label(str: "")
+        valueLabel.add(cssClass: "title-1")
+        valueLabel.halign = .start
+        valueRow.append(child: valueLabel)
+
+        unitLabel = Label(str: unit ?? "")
+        unitLabel.add(cssClass: "dim-label")
+        unitLabel.halign = .start
+        valueRow.append(child: unitLabel)
+
+        deltaLabel = Label(str: "")
+        deltaLabel.add(cssClass: "caption")
+        deltaLabel.halign = .start
+        valueRow.append(child: deltaLabel)
+
+        emptyLabel = Label(str: "No data.")
+        emptyLabel.add(cssClass: "dim-label")
+        emptyLabel.halign = .start
+
+        widget.append(child: valueRow)
+        widget.append(child: emptyLabel)
+
+        if let initial {
+            set(value: initial)
+        } else {
+            showEmptyState()
+        }
+    }
+
+    func set(value: WidgetCounterValue) {
+        valueLabel.label = formatNumber(value.value)
+        let resolvedUnit = value.unit ?? unitFromConfig
+        unitLabel.label = resolvedUnit ?? ""
+        unitLabel.visible = resolvedUnit != nil
+        if let delta = value.delta {
+            deltaLabel.label = formatDelta(delta)
+            deltaLabel.visible = true
+        } else {
+            deltaLabel.visible = false
+        }
+        valueRow.visible = true
+        emptyLabel.visible = false
+    }
+
+    func clear() {
+        showEmptyState()
+    }
+
+    private func showEmptyState() {
+        valueRow.visible = false
+        emptyLabel.visible = true
+    }
+
+    private func formatNumber(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int64(value))
+        }
+        return String(format: "%.2f", value)
+    }
+
+    private func formatDelta(_ delta: Double) -> String {
+        let sign = delta >= 0 ? "+" : ""
+        return "\(sign)\(formatNumber(delta))"
+    }
+}
+
+@MainActor
+private final class HistogramView {
+    let widget: Box
+    private let drawingArea: DrawingArea
+    private var buckets: [WidgetHistogramBucket]
+
+    init(initial: [WidgetHistogramBucket]) {
+        self.buckets = initial
+
+        widget = Box(orientation: .vertical, spacing: 0)
+        drawingArea = DrawingArea()
+        drawingArea.hexpand = true
+        drawingArea.contentHeight = 180
+        widget.append(child: drawingArea)
+
+        drawingArea.setDrawFunc { [weak self] _, ctx, width, height in
+            MainActor.assumeIsolated {
+                self?.draw(ctx: ctx, width: Double(width), height: Double(height))
+            }
+        }
+    }
+
+    func setBuckets(_ buckets: [WidgetHistogramBucket]) {
+        self.buckets = buckets
+        drawingArea.queueDraw()
+    }
+
+    func increment(label: String, by: Double) {
+        if let i = buckets.firstIndex(where: { $0.label == label }) {
+            buckets[i].count += by
+        } else {
+            buckets.append(WidgetHistogramBucket(label: label, count: by))
+        }
+        drawingArea.queueDraw()
+    }
+
+    func clear() {
+        buckets.removeAll()
+        drawingArea.queueDraw()
+    }
+
+    private func draw(ctx: Cairo.ContextRef, width: Double, height: Double) {
+        guard !buckets.isEmpty, let maxCount = buckets.map(\.count).max(), maxCount > 0 else { return }
+        let inset: Double = 12
+        let plotWidth = max(1.0, width - inset * 2)
+        let plotHeight = max(1.0, height - inset * 2)
+        let barCount = Double(buckets.count)
+        let gap: Double = 4
+        let barWidth = max(1.0, (plotWidth - gap * (barCount - 1)) / barCount)
+
+        ctx.setSource(red: 0.20, green: 0.55, blue: 0.92, alpha: 0.85)
+        for (i, bucket) in buckets.enumerated() {
+            let h = plotHeight * (bucket.count / maxCount)
+            let x = inset + Double(i) * (barWidth + gap)
+            let y = inset + plotHeight - h
+            ctx.rectangle(x: x, y: y, width: barWidth, height: h)
+            ctx.fill()
+        }
+    }
+}
+
+@MainActor
+private final class HexValueView {
+    let widget: Box
+    private let textView: TextView
+
+    init(initial: WidgetHexState?) {
+        widget = Box(orientation: .vertical, spacing: 0)
+
+        let scrolled = ScrolledWindow()
+        scrolled.hexpand = true
+        scrolled.vexpand = true
+        scrolled.setSizeRequest(width: -1, height: 220)
+
+        textView = TextView()
+        textView.editable = false
+        textView.cursorVisible = false
+        textView.monospace = true
+        textView.add(cssClass: "monospace")
+        scrolled.set(child: textView)
+
+        widget.append(child: scrolled)
+
+        if let initial { set(state: initial) }
+    }
+
+    func set(state: WidgetHexState) {
+        textView.buffer.text = format(state: state)
+    }
+
+    func clear() {
+        textView.buffer.text = ""
+    }
+
+    private func format(state: WidgetHexState) -> String {
+        let bytes = [UInt8](state.bytes)
+        var lines: [String] = []
+        var offset = 0
+        while offset < bytes.count {
+            let end = min(offset + 16, bytes.count)
+            let row = bytes[offset..<end]
+            let hex = row.map { String(format: "%02x", $0) }.joined(separator: " ")
+            let ascii = row.map { (32...126).contains($0) ? String(UnicodeScalar($0)) : "." }.joined()
+            let address = state.baseAddress &+ UInt64(offset)
+            lines.append(String(format: "%016llx  %-47s  %@", address, hex, ascii) as String)
+            offset = end
+        }
+        return lines.joined(separator: "\n")
     }
 }

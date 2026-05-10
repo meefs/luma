@@ -56,6 +56,14 @@ private struct WidgetCanvas: View {
                 graphView(cfg)
             case .list(let cfg):
                 listView(cfg)
+            case .table(let cfg):
+                tableView(cfg)
+            case .counter(let cfg):
+                counterView(cfg)
+            case .histogram:
+                histogramView()
+            case .hex:
+                hexView()
             }
         }
         .task(id: instance?.id) { await consumeUpdates() }
@@ -113,6 +121,127 @@ private struct WidgetCanvas: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func tableView(_ cfg: InstrumentWidget.TableConfig) -> some View {
+        if cfg.columns.isEmpty {
+            Text("No columns defined.").font(.caption).foregroundStyle(.secondary)
+        } else if state.tableRows.isEmpty {
+            Text("No rows.").font(.caption).foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                tableHeader(cfg)
+                Divider()
+                ForEach(state.tableRows) { row in
+                    tableRow(row: row, columns: cfg.columns, actions: cfg.actions)
+                    Divider().opacity(0.3)
+                }
+            }
+            .font(.system(.caption, design: .monospaced))
+        }
+    }
+
+    private func tableHeader(_ cfg: InstrumentWidget.TableConfig) -> some View {
+        HStack(spacing: 8) {
+            ForEach(cfg.columns) { col in
+                Text(col.name)
+                    .frame(maxWidth: .infinity, alignment: alignment(for: col.alignment))
+                    .foregroundStyle(.secondary)
+            }
+            if !cfg.actions.isEmpty {
+                Color.clear.frame(width: actionWidth(cfg.actions))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func tableRow(row: WidgetTableRow, columns: [InstrumentWidget.Column], actions: [InstrumentWidget.Action]) -> some View {
+        HStack(spacing: 8) {
+            ForEach(columns) { col in
+                Text(row.cells[col.id] ?? "")
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: alignment(for: col.alignment))
+            }
+            if !actions.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(actions) { action in
+                        Button(action.name) { invoke(action: action.id, item: row.id) }
+                            .buttonStyle(.borderless)
+                    }
+                }
+                .frame(width: actionWidth(actions), alignment: .trailing)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func alignment(for value: InstrumentWidget.Column.Alignment) -> SwiftUI.Alignment {
+        value == .leading ? .leading : .trailing
+    }
+
+    private func actionWidth(_ actions: [InstrumentWidget.Action]) -> CGFloat {
+        CGFloat(actions.count) * 64
+    }
+
+    @ViewBuilder
+    private func counterView(_ cfg: InstrumentWidget.CounterConfig) -> some View {
+        if let value = state.counter {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(formatCounter(value.value))
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                if let unit = value.unit ?? cfg.unit {
+                    Text(unit).foregroundStyle(.secondary)
+                }
+                if let delta = value.delta {
+                    Text(formatDelta(delta))
+                        .font(.caption)
+                        .foregroundStyle(delta >= 0 ? .green : .red)
+                }
+                Spacer()
+            }
+        } else {
+            Text("No data.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func formatCounter(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int64(value))
+        }
+        return String(format: "%.2f", value)
+    }
+
+    private func formatDelta(_ delta: Double) -> String {
+        let sign = delta >= 0 ? "+" : ""
+        return "\(sign)\(formatCounter(delta))"
+    }
+
+    @ViewBuilder
+    private func histogramView() -> some View {
+        if state.histogram.isEmpty {
+            Text("No data.").font(.caption).foregroundStyle(.secondary)
+        } else {
+            Chart {
+                ForEach(state.histogram, id: \.label) { bucket in
+                    BarMark(
+                        x: .value("bucket", bucket.label),
+                        y: .value("count", bucket.count)
+                    )
+                }
+            }
+            .frame(height: 180)
+        }
+    }
+
+    @ViewBuilder
+    private func hexView() -> some View {
+        if let hex = state.hex {
+            HexView(data: hex.bytes)
+                .frame(maxHeight: 240)
+        } else {
+            Text("No data.").font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private func invoke(action: String, item: String) {

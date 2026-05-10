@@ -296,6 +296,14 @@ final class CustomInstrumentWidgetsDialog {
             body.append(child: graphSeriesEditor(initial: cfg.series, index: index))
         case .list(let cfg):
             body.append(child: listActionsEditor(initial: cfg.actions, index: index))
+        case .table(let cfg):
+            body.append(child: tableEditor(initial: cfg, index: index))
+        case .counter(let cfg):
+            body.append(child: counterEditor(initial: cfg, index: index))
+        case .histogram(let cfg):
+            body.append(child: histogramEditor(initial: cfg, index: index))
+        case .hex(let cfg):
+            body.append(child: hexEditor(initial: cfg, index: index))
         }
         column.append(child: body)
 
@@ -603,6 +611,320 @@ final class CustomInstrumentWidgetsDialog {
         rebuildActionRows(into: list, items: cfg.actions, widgetIndex: widgetIndex)
     }
 
+    private func tableEditor(initial: InstrumentWidget.TableConfig, index: Int) -> Box {
+        let outer = Box(orientation: .vertical, spacing: 4)
+        outer.append(child: tableCapRow(widgetIndex: index))
+
+        let columnsHeader = Label(str: "Columns")
+        columnsHeader.halign = .start
+        columnsHeader.add(cssClass: "caption")
+        outer.append(child: columnsHeader)
+        let columnsList = Box(orientation: .vertical, spacing: 4)
+        outer.append(child: columnsList)
+        rebuildColumnRows(into: columnsList, items: initial.columns, widgetIndex: index)
+        outer.append(child: columnsAddRow(into: columnsList, widgetIndex: index))
+
+        let actionsHeader = Label(str: "Actions")
+        actionsHeader.halign = .start
+        actionsHeader.add(cssClass: "caption")
+        actionsHeader.marginTop = 8
+        outer.append(child: actionsHeader)
+        let actionsList = Box(orientation: .vertical, spacing: 4)
+        outer.append(child: actionsList)
+        rebuildTableActionRows(into: actionsList, items: initial.actions, widgetIndex: index)
+        outer.append(child: tableActionsAddRow(into: actionsList, widgetIndex: index))
+        return outer
+    }
+
+    private func tableCapRow(widgetIndex: Int) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let label = Label(str: "Max rows")
+        label.halign = .start
+        label.setSizeRequest(width: 160, height: -1)
+        row.append(child: label)
+        let entry = Entry()
+        if case .table(let cfg) = draftWidgets[widgetIndex].kind {
+            entry.text = String(cfg.maxRows)
+        }
+        entry.setSizeRequest(width: 120, height: -1)
+        entry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, widgetIndex < self.draftWidgets.count,
+                    case .table(var cfg) = self.draftWidgets[widgetIndex].kind,
+                    let value = Int(entry.text ?? ""), value >= 1
+                else { return }
+                cfg.maxRows = value
+                self.draftWidgets[widgetIndex].kind = .table(cfg)
+            }
+        }
+        row.append(child: entry)
+        return row
+    }
+
+    private func rebuildColumnRows(into list: Box, items: [InstrumentWidget.Column], widgetIndex: Int) {
+        var child = list.firstChild
+        while let current = child {
+            child = current.nextSibling
+            list.remove(child: current)
+        }
+        for (i, item) in items.enumerated() {
+            list.append(child: columnRow(item: item, widgetIndex: widgetIndex, itemIndex: i, list: list))
+        }
+    }
+
+    private func columnRow(item: InstrumentWidget.Column, widgetIndex: Int, itemIndex: Int, list: Box) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 6)
+        let idEntry = Entry()
+        idEntry.text = item.id
+        idEntry.placeholderText = "id"
+        idEntry.setSizeRequest(width: 140, height: -1)
+        idEntry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateTableColumn(at: widgetIndex, itemIndex: itemIndex) { $0.id = idEntry.text ?? "" }
+            }
+        }
+        row.append(child: idEntry)
+        let nameEntry = Entry()
+        nameEntry.text = item.name
+        nameEntry.placeholderText = "Name"
+        nameEntry.hexpand = true
+        nameEntry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateTableColumn(at: widgetIndex, itemIndex: itemIndex) { $0.name = nameEntry.text ?? "" }
+            }
+        }
+        row.append(child: nameEntry)
+        let removeButton = Button(label: "−")
+        removeButton.onClicked { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.removeTableColumn(at: widgetIndex, itemIndex: itemIndex, list: list)
+            }
+        }
+        row.append(child: removeButton)
+        return row
+    }
+
+    private func columnsAddRow(into list: Box, widgetIndex: Int) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 6)
+        let idEntry = Entry()
+        idEntry.placeholderText = "id"
+        idEntry.setSizeRequest(width: 140, height: -1)
+        let nameEntry = Entry()
+        nameEntry.placeholderText = "Name"
+        nameEntry.hexpand = true
+        let appendAction: () -> Void = { [weak self] in
+            guard let self else { return }
+            let id = (idEntry.text ?? "").trimmingCharacters(in: .whitespaces)
+            let name = (nameEntry.text ?? "").trimmingCharacters(in: .whitespaces)
+            guard !id.isEmpty, !name.isEmpty, widgetIndex < self.draftWidgets.count,
+                case .table(var cfg) = self.draftWidgets[widgetIndex].kind,
+                !cfg.columns.contains(where: { $0.id == id })
+            else { return }
+            cfg.columns.append(InstrumentWidget.Column(id: id, name: name))
+            self.draftWidgets[widgetIndex].kind = .table(cfg)
+            idEntry.text = ""
+            nameEntry.text = ""
+            self.rebuildColumnRows(into: list, items: cfg.columns, widgetIndex: widgetIndex)
+            _ = idEntry.grabFocus()
+        }
+        idEntry.onActivate { _ in MainActor.assumeIsolated { appendAction() } }
+        nameEntry.onActivate { _ in MainActor.assumeIsolated { appendAction() } }
+        row.append(child: idEntry)
+        row.append(child: nameEntry)
+        let addButton = Button(label: "+")
+        addButton.onClicked { _ in MainActor.assumeIsolated { appendAction() } }
+        row.append(child: addButton)
+        return row
+    }
+
+    private func updateTableColumn(at widgetIndex: Int, itemIndex: Int, mutate: (inout InstrumentWidget.Column) -> Void) {
+        guard widgetIndex < draftWidgets.count,
+            case .table(var cfg) = draftWidgets[widgetIndex].kind,
+            itemIndex < cfg.columns.count
+        else { return }
+        var item = cfg.columns[itemIndex]
+        mutate(&item)
+        cfg.columns[itemIndex] = item
+        draftWidgets[widgetIndex].kind = .table(cfg)
+    }
+
+    private func removeTableColumn(at widgetIndex: Int, itemIndex: Int, list: Box) {
+        guard widgetIndex < draftWidgets.count,
+            case .table(var cfg) = draftWidgets[widgetIndex].kind,
+            itemIndex < cfg.columns.count
+        else { return }
+        cfg.columns.remove(at: itemIndex)
+        draftWidgets[widgetIndex].kind = .table(cfg)
+        rebuildColumnRows(into: list, items: cfg.columns, widgetIndex: widgetIndex)
+    }
+
+    private func rebuildTableActionRows(into list: Box, items: [InstrumentWidget.Action], widgetIndex: Int) {
+        var child = list.firstChild
+        while let current = child {
+            child = current.nextSibling
+            list.remove(child: current)
+        }
+        for (i, item) in items.enumerated() {
+            list.append(child: tableActionRow(item: item, widgetIndex: widgetIndex, itemIndex: i, list: list))
+        }
+    }
+
+    private func tableActionRow(item: InstrumentWidget.Action, widgetIndex: Int, itemIndex: Int, list: Box) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 6)
+        let idEntry = Entry()
+        idEntry.text = item.id
+        idEntry.placeholderText = "id"
+        idEntry.setSizeRequest(width: 140, height: -1)
+        idEntry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateTableAction(at: widgetIndex, itemIndex: itemIndex) { $0.id = idEntry.text ?? "" }
+            }
+        }
+        row.append(child: idEntry)
+        let nameEntry = Entry()
+        nameEntry.text = item.name
+        nameEntry.placeholderText = "Name"
+        nameEntry.hexpand = true
+        nameEntry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateTableAction(at: widgetIndex, itemIndex: itemIndex) { $0.name = nameEntry.text ?? "" }
+            }
+        }
+        row.append(child: nameEntry)
+        let removeButton = Button(label: "−")
+        removeButton.onClicked { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.removeTableAction(at: widgetIndex, itemIndex: itemIndex, list: list)
+            }
+        }
+        row.append(child: removeButton)
+        return row
+    }
+
+    private func tableActionsAddRow(into list: Box, widgetIndex: Int) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 6)
+        let idEntry = Entry()
+        idEntry.placeholderText = "id"
+        idEntry.setSizeRequest(width: 140, height: -1)
+        let nameEntry = Entry()
+        nameEntry.placeholderText = "Name"
+        nameEntry.hexpand = true
+        let appendAction: () -> Void = { [weak self] in
+            guard let self else { return }
+            let id = (idEntry.text ?? "").trimmingCharacters(in: .whitespaces)
+            let name = (nameEntry.text ?? "").trimmingCharacters(in: .whitespaces)
+            guard !id.isEmpty, !name.isEmpty, widgetIndex < self.draftWidgets.count,
+                case .table(var cfg) = self.draftWidgets[widgetIndex].kind,
+                !cfg.actions.contains(where: { $0.id == id })
+            else { return }
+            cfg.actions.append(InstrumentWidget.Action(id: id, name: name))
+            self.draftWidgets[widgetIndex].kind = .table(cfg)
+            idEntry.text = ""
+            nameEntry.text = ""
+            self.rebuildTableActionRows(into: list, items: cfg.actions, widgetIndex: widgetIndex)
+            _ = idEntry.grabFocus()
+        }
+        idEntry.onActivate { _ in MainActor.assumeIsolated { appendAction() } }
+        nameEntry.onActivate { _ in MainActor.assumeIsolated { appendAction() } }
+        row.append(child: idEntry)
+        row.append(child: nameEntry)
+        let addButton = Button(label: "+")
+        addButton.onClicked { _ in MainActor.assumeIsolated { appendAction() } }
+        row.append(child: addButton)
+        return row
+    }
+
+    private func updateTableAction(at widgetIndex: Int, itemIndex: Int, mutate: (inout InstrumentWidget.Action) -> Void) {
+        guard widgetIndex < draftWidgets.count,
+            case .table(var cfg) = draftWidgets[widgetIndex].kind,
+            itemIndex < cfg.actions.count
+        else { return }
+        var item = cfg.actions[itemIndex]
+        mutate(&item)
+        cfg.actions[itemIndex] = item
+        draftWidgets[widgetIndex].kind = .table(cfg)
+    }
+
+    private func removeTableAction(at widgetIndex: Int, itemIndex: Int, list: Box) {
+        guard widgetIndex < draftWidgets.count,
+            case .table(var cfg) = draftWidgets[widgetIndex].kind,
+            itemIndex < cfg.actions.count
+        else { return }
+        cfg.actions.remove(at: itemIndex)
+        draftWidgets[widgetIndex].kind = .table(cfg)
+        rebuildTableActionRows(into: list, items: cfg.actions, widgetIndex: widgetIndex)
+    }
+
+    private func counterEditor(initial: InstrumentWidget.CounterConfig, index: Int) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let label = Label(str: "Unit")
+        label.halign = .start
+        label.setSizeRequest(width: 160, height: -1)
+        row.append(child: label)
+        let entry = Entry()
+        entry.placeholderText = "(optional)"
+        entry.text = initial.unit ?? ""
+        entry.hexpand = true
+        entry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, index < self.draftWidgets.count,
+                    case .counter(var cfg) = self.draftWidgets[index].kind
+                else { return }
+                let text = entry.text ?? ""
+                cfg.unit = text.isEmpty ? nil : text
+                self.draftWidgets[index].kind = .counter(cfg)
+            }
+        }
+        row.append(child: entry)
+        return row
+    }
+
+    private func histogramEditor(initial: InstrumentWidget.HistogramConfig, index: Int) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let label = Label(str: "Max buckets")
+        label.halign = .start
+        label.setSizeRequest(width: 160, height: -1)
+        row.append(child: label)
+        let entry = Entry()
+        entry.text = String(initial.maxBuckets)
+        entry.setSizeRequest(width: 120, height: -1)
+        entry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, index < self.draftWidgets.count,
+                    case .histogram(var cfg) = self.draftWidgets[index].kind,
+                    let value = Int(entry.text ?? ""), value >= 1
+                else { return }
+                cfg.maxBuckets = value
+                self.draftWidgets[index].kind = .histogram(cfg)
+            }
+        }
+        row.append(child: entry)
+        return row
+    }
+
+    private func hexEditor(initial: InstrumentWidget.HexConfig, index: Int) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let label = Label(str: "Max bytes")
+        label.halign = .start
+        label.setSizeRequest(width: 160, height: -1)
+        row.append(child: label)
+        let entry = Entry()
+        entry.text = String(initial.maxBytes)
+        entry.setSizeRequest(width: 120, height: -1)
+        entry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, index < self.draftWidgets.count,
+                    case .hex(var cfg) = self.draftWidgets[index].kind,
+                    let value = Int(entry.text ?? ""), value >= 1
+                else { return }
+                cfg.maxBytes = value
+                self.draftWidgets[index].kind = .hex(cfg)
+            }
+        }
+        row.append(child: entry)
+        return row
+    }
+
     private func applyExpansion(to newID: String?) {
         expandedID = newID
         for (rowID, entry) in widgetBodies {
@@ -626,12 +948,16 @@ final class CustomInstrumentWidgetsDialog {
 }
 
 enum WidgetKindChoice: CaseIterable {
-    case graph, list
+    case graph, list, table, counter, histogram, hex
 
     var label: String {
         switch self {
         case .graph: return "Graph"
         case .list: return "List"
+        case .table: return "Table"
+        case .counter: return "Counter"
+        case .histogram: return "Histogram"
+        case .hex: return "Hex Dump"
         }
     }
 
@@ -643,6 +969,10 @@ enum WidgetKindChoice: CaseIterable {
         switch kind {
         case .graph: self = .graph
         case .list: self = .list
+        case .table: self = .table
+        case .counter: self = .counter
+        case .histogram: self = .histogram
+        case .hex: self = .hex
         }
     }
 
@@ -650,6 +980,10 @@ enum WidgetKindChoice: CaseIterable {
         switch self {
         case .graph: return .graph(InstrumentWidget.GraphConfig())
         case .list: return .list(InstrumentWidget.ListConfig())
+        case .table: return .table(InstrumentWidget.TableConfig())
+        case .counter: return .counter(InstrumentWidget.CounterConfig())
+        case .histogram: return .histogram(InstrumentWidget.HistogramConfig())
+        case .hex: return .hex(InstrumentWidget.HexConfig())
         }
     }
 }
