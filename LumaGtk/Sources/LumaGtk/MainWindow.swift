@@ -437,7 +437,7 @@ final class MainWindow {
             self?.refreshCustomInstrumentDefPane()
         }
         renderCustomInstruments()
-        NotificationCenter.default.addObserver(
+        _ = NotificationCenter.default.addObserver(
             forName: .lumaSelectCustomInstrumentDef,
             object: nil,
             queue: .main

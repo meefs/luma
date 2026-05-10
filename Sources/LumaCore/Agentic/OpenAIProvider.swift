@@ -148,7 +148,7 @@ private func driveOpenAIStream(
 }
 
 private func buildOpenAIRequestBody(_ request: LLMTurnRequest) -> [String: Any] {
-    var messages = openAIMessages(systemBlocks: request.systemBlocks, conversation: request.messages)
+    let messages = openAIMessages(systemBlocks: request.systemBlocks, conversation: request.messages)
 
     var body: [String: Any] = [
         "model": request.modelID,

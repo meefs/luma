@@ -56,7 +56,7 @@ public actor EventStore {
     private func appendBytes(_ bytes: Data) {
         if let handle = try? FileHandle(forWritingTo: fileURL) {
             defer { try? handle.close() }
-            try? handle.seekToEnd()
+            _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: bytes)
         } else {
             try? bytes.write(to: fileURL, options: .atomic)

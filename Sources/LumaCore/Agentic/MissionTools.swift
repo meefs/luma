@@ -2175,7 +2175,7 @@ public enum MissionTools {
             }
 
             let sessionID = parseSessionID(invocation.args)
-            var finding = MissionFinding(
+            let finding = MissionFinding(
                 missionID: invocation.mission.id,
                 title: title,
                 bodyMarkdown: body,
