@@ -21,6 +21,11 @@ public enum MissionTools {
         registerExplainFunction(in: catalog, engine: engine)
         registerReadMemory(in: catalog, engine: engine)
         registerRecordFinding(in: catalog, engine: engine)
+        registerListNotebookEntries(in: catalog, engine: engine)
+        registerReadNotebookEntry(in: catalog, engine: engine)
+        registerCreateNotebookEntry(in: catalog, engine: engine)
+        registerUpdateNotebookEntry(in: catalog, engine: engine)
+        registerDeleteNotebookEntry(in: catalog, engine: engine)
         registerEvalREPL(in: catalog, engine: engine)
         registerInstallTracerHook(in: catalog, engine: engine)
         registerListTracerHooks(in: catalog, engine: engine)
@@ -573,6 +578,154 @@ public enum MissionTools {
                 return errorResult("memory read failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    // MARK: - notebook
+
+    private static func registerListNotebookEntries(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "list_notebook_entries",
+            description: "List notebook entries in this project. Returns id, kind (note or capture), title, a short details preview, and optional session/process attribution. Use read_notebook_entry to fetch full bodies.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{},"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] _ in
+            guard let engine else { return errorResult("engine unavailable") }
+            let array = engine.notebookEntries.map(notebookListEntry)
+            return makeResult(jsonObject: array, summary: "\(array.count) notebook entr\(array.count == 1 ? "y" : "ies")")
+        }
+    }
+
+    private static func registerReadNotebookEntry(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "read_notebook_entry",
+            description: "Read a notebook entry's full body, including the complete details text.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"entry_id":{"type":"string"}},"required":["entry_id"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine else { return errorResult("engine unavailable") }
+            guard let entryID = (invocation.args["entry_id"] as? String).flatMap(UUID.init(uuidString:)) else {
+                return errorResult("missing or invalid entry_id")
+            }
+            guard let entry = engine.notebookEntries.first(where: { $0.id == entryID }) else {
+                return errorResult("no notebook entry with id \(entryID)")
+            }
+            var payload = notebookListEntry(entry)
+            payload["details"] = entry.details
+            return makeResult(jsonObject: payload, summary: "Notebook entry: \(entry.title)")
+        }
+    }
+
+    private static func registerCreateNotebookEntry(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "create_notebook_entry",
+            description: "Create a notebook entry. 'kind' defaults to 'note' (a freeform note). Use 'capture' when the body comes from a target observation. Requires user approval.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"title":{"type":"string"},"details":{"type":"string"},"kind":{"type":"string","enum":["note","capture"],"default":"note"},"session_id":{"type":"string"}},"required":["title","details"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine else { return errorResult("engine unavailable") }
+            guard let title = invocation.args["title"] as? String, !title.isEmpty else {
+                return errorResult("missing title")
+            }
+            guard let details = invocation.args["details"] as? String else {
+                return errorResult("missing details")
+            }
+            let kind: NotebookEntry.Kind = ((invocation.args["kind"] as? String) == "capture") ? .capture : .note
+            let sessionID = (invocation.args["session_id"] as? String).flatMap(UUID.init(uuidString:))
+            let processName = sessionID.flatMap { id in engine.sessions.first(where: { $0.id == id })?.processName }
+            let entry = NotebookEntry(
+                kind: kind,
+                title: title,
+                details: details,
+                sessionID: sessionID,
+                processName: processName
+            )
+            engine.addNotebookEntry(entry)
+            return makeResult(jsonObject: ["entry_id": entry.id.uuidString, "title": entry.title], summary: "Created notebook entry: \(entry.title)")
+        }
+    }
+
+    private static func registerUpdateNotebookEntry(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "update_notebook_entry",
+            description: "Update a notebook entry's title, details, or kind. Only fields you pass change. Requires user approval.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"entry_id":{"type":"string"},"title":{"type":"string"},"details":{"type":"string"},"kind":{"type":"string","enum":["note","capture"]}},"required":["entry_id"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine else { return errorResult("engine unavailable") }
+            guard let entryID = (invocation.args["entry_id"] as? String).flatMap(UUID.init(uuidString:)) else {
+                return errorResult("missing or invalid entry_id")
+            }
+            guard var entry = engine.notebookEntries.first(where: { $0.id == entryID }) else {
+                return errorResult("no notebook entry with id \(entryID)")
+            }
+            if let title = invocation.args["title"] as? String, !title.isEmpty {
+                entry.title = title
+            }
+            if let details = invocation.args["details"] as? String {
+                entry.details = details
+            }
+            if let kindRaw = invocation.args["kind"] as? String {
+                entry.kind = (kindRaw == "capture") ? .capture : .note
+            }
+            engine.updateNotebookEntry(entry)
+            return makeResult(jsonObject: ["entry_id": entry.id.uuidString, "title": entry.title], summary: "Updated notebook entry: \(entry.title)")
+        }
+    }
+
+    private static func registerDeleteNotebookEntry(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "delete_notebook_entry",
+            description: "Delete a notebook entry. Requires user approval.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"entry_id":{"type":"string"}},"required":["entry_id"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine else { return errorResult("engine unavailable") }
+            guard let entryID = (invocation.args["entry_id"] as? String).flatMap(UUID.init(uuidString:)) else {
+                return errorResult("missing or invalid entry_id")
+            }
+            guard let entry = engine.notebookEntries.first(where: { $0.id == entryID }) else {
+                return errorResult("no notebook entry with id \(entryID)")
+            }
+            engine.deleteNotebookEntry(entry)
+            return makeResult(jsonObject: ["entry_id": entryID.uuidString, "removed": true], summary: "Deleted notebook entry: \(entry.title)")
+        }
+    }
+
+    private static func notebookListEntry(_ entry: NotebookEntry) -> [String: Any] {
+        var payload: [String: Any] = [
+            "entry_id": entry.id.uuidString,
+            "kind": entry.kind.rawValue,
+            "title": entry.title,
+            "preview": String(entry.details.prefix(200)),
+            "timestamp": ISO8601DateFormatter().string(from: entry.timestamp),
+        ]
+        if let sessionID = entry.sessionID {
+            payload["session_id"] = sessionID.uuidString
+        }
+        if let processName = entry.processName {
+            payload["process_name"] = processName
+        }
+        return payload
     }
 
     // MARK: - eval_repl (act)
