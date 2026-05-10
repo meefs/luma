@@ -18,6 +18,7 @@ public enum MissionTools {
         registerListSessionInstruments(in: catalog, engine: engine)
         registerArmSession(in: catalog, engine: engine)
         registerDisarmSession(in: catalog, engine: engine)
+        registerResumeSession(in: catalog, engine: engine)
         registerSummarizeRecentEvents(in: catalog, engine: engine)
         registerWaitForEvent(in: catalog, engine: engine)
         registerResolveSymbol(in: catalog, engine: engine)
@@ -27,6 +28,8 @@ public enum MissionTools {
         registerReadMemory(in: catalog, engine: engine)
         registerWriteMemory(in: catalog, engine: engine)
         registerRecordFinding(in: catalog, engine: engine)
+        registerListFindings(in: catalog, engine: engine)
+        registerReadFinding(in: catalog, engine: engine)
         registerListNotebookEntries(in: catalog, engine: engine)
         registerReadNotebookEntry(in: catalog, engine: engine)
         registerCreateNotebookEntry(in: catalog, engine: engine)
@@ -541,6 +544,29 @@ public enum MissionTools {
             await engine.disarmSession(id: sessionID)
             let payload: [String: Any] = ["session_id": sessionID.uuidString]
             return makeResult(jsonObject: payload, summary: "Disarmed session")
+        }
+    }
+
+    private static func registerResumeSession(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "resume_session",
+            description: "Resume a session held after a gated-spawn attach (phase = awaiting_initial_resume). Use after arm_session captures the target and you've installed any hooks; the target process actually starts running. No-op if the session is already running.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let node = engine.node(forSessionID: sessionID) else {
+                return errorResult("no attached session for id \(sessionID)", code: .notFound)
+            }
+            await engine.resumeSpawnedProcess(node: node)
+            let payload: [String: Any] = ["session_id": sessionID.uuidString]
+            return makeResult(jsonObject: payload, summary: "Resumed session")
         }
     }
 
@@ -2182,6 +2208,85 @@ public enum MissionTools {
                 summary: "Recorded finding \"\(title)\" (\(confidence.rawValue), \(validatedEvidence.count) evidence)"
             )
         }
+    }
+
+    private static func registerListFindings(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "list_findings",
+            description: "List findings recorded during this mission. Returns id, title, confidence, kind, status, session_id, and created_at. Use to remember what you've already grounded so you don't double-record.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"status":{"type":"string","enum":["proposed","accepted","refuted","superseded"]},"confidence":{"type":"string","enum":["low","medium","high"]},"limit":{"type":"integer","minimum":1,"maximum":500,"description":"Max results (default 100)"}},"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
+            let limit = (invocation.args["limit"] as? Int) ?? 100
+            let statusFilter = (invocation.args["status"] as? String).flatMap(MissionFindingStatus.init(rawValue:))
+            let confidenceFilter = (invocation.args["confidence"] as? String).flatMap(MissionFindingConfidence.init(rawValue:))
+            let findings = (try? engine.store.fetchMissionFindings(missionID: invocation.mission.id)) ?? []
+            let filtered = findings.filter { f in
+                (statusFilter == nil || f.status == statusFilter) &&
+                (confidenceFilter == nil || f.confidence == confidenceFilter)
+            }
+            let array = filtered.suffix(limit).map(findingSummaryJSON)
+            return makeResult(jsonObject: Array(array), summary: "\(array.count) finding\(array.count == 1 ? "" : "s")")
+        }
+    }
+
+    private static func findingSummaryJSON(_ finding: MissionFinding) -> [String: Any] {
+        var obj: [String: Any] = [
+            "finding_id": finding.id.uuidString,
+            "title": finding.title,
+            "confidence": finding.confidence.rawValue,
+            "kind": finding.kind,
+            "status": finding.status.rawValue,
+            "created_at": ISO8601DateFormatter().string(from: finding.createdAt),
+        ]
+        if let sessionID = finding.sessionID {
+            obj["session_id"] = sessionID.uuidString
+        }
+        return obj
+    }
+
+    private static func registerReadFinding(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "read_finding",
+            description: "Read the full body and evidence list for a finding. Use after list_findings to fetch markdown and the evidence references that grounded the claim.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"finding_id":{"type":"string"}},"required":["finding_id"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
+            guard let idString = invocation.args["finding_id"] as? String,
+                let findingID = UUID(uuidString: idString)
+            else {
+                return errorResult("missing or invalid finding_id", code: .invalidInput)
+            }
+            let findings = (try? engine.store.fetchMissionFindings(missionID: invocation.mission.id)) ?? []
+            guard let finding = findings.first(where: { $0.id == findingID }) else {
+                return errorResult("no finding with id \(findingID)", code: .notFound)
+            }
+            let evidence = (try? engine.store.fetchMissionEvidence(findingID: findingID)) ?? []
+            var obj = findingSummaryJSON(finding)
+            obj["body_markdown"] = finding.bodyMarkdown
+            obj["evidence"] = evidence.map(evidenceJSON)
+            return makeResult(jsonObject: obj, summary: "Read finding \"\(finding.title)\"")
+        }
+    }
+
+    private static func evidenceJSON(_ evidence: MissionEvidence) -> [String: Any] {
+        var obj: [String: Any] = ["kind": evidence.kind.rawValue]
+        if let data = evidence.refJSON.data(using: .utf8),
+            let ref = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            obj["ref"] = ref
+        }
+        return obj
     }
 
     // MARK: - decompile
