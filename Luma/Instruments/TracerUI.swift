@@ -31,8 +31,7 @@ struct TracerUI: InstrumentUI {
         selection: Binding<SidebarItemID?>
     ) -> AnyView {
         guard case .jsValue(let v) = event.payload,
-            let ev = Engine.parseTracerEvent(from: v),
-            let processNode = workspace.processNode(for: event)
+            let ev = Engine.parseTracerEvent(from: v)
         else {
             return AnyView(
                 Text(String(describing: event.payload))
@@ -67,7 +66,7 @@ struct TracerUI: InstrumentUI {
         return AnyView(
             TracerEventRowView(
                 messageView: messageView,
-                process: processNode,
+                process: workspace.processNode(for: event),
                 backtrace: ev.backtrace,
                 workspace: workspace,
                 selection: selection

@@ -3,7 +3,7 @@ import LumaCore
 
 struct TracerEventRowView: View {
     let messageView: AnyView
-    let process: LumaCore.ProcessNode
+    let process: LumaCore.ProcessNode?
     let backtrace: [JSInspectValue]?
     let workspace: Workspace
     @Binding var selection: SidebarItemID?
@@ -16,7 +16,7 @@ struct TracerEventRowView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             messageView
 
-            if let backtrace, !backtrace.isEmpty {
+            if let process, let backtrace, !backtrace.isEmpty {
                 Spacer(minLength: 0)
 
                 Button {
