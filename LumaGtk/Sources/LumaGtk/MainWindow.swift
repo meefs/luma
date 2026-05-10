@@ -5,6 +5,7 @@ import Frida
 import Gtk
 import LumaCore
 import Observation
+import Pango
 
 @MainActor
 final class MainWindow {
@@ -28,6 +29,16 @@ final class MainWindow {
     private var packagesEmptyHint: Label!
     private let notebookListBox: ListBox
     private let notebookRow: ListBoxRow
+    private let missionsListBox: ListBox
+    private let missionsHeaderRow: ListBoxRow
+    private var missionsExpansionChevron: Gtk.Image!
+    private var missionsExpansionButton: Button!
+    private var missionsExpanded: Bool = true
+    private var missions: [Mission] = []
+    private var missionRowIDs: [UUID] = []
+    private var currentMissionsListPane: MissionsListPane?
+    private var currentMissionDetailPane: MissionDetailPane?
+    private var projectUIStateBox: ProjectUIStateBox!
     private let detailContainer: Box
     private let eventStreamPane: EventStreamPane
     private var notebookPane: NotebookPane?
@@ -82,6 +93,8 @@ final class MainWindow {
         case itrace(sessionID: UUID, traceID: UUID)
         case package(UUID)
         case customInstrumentDef(UUID)
+        case missionsList
+        case mission(UUID)
     }
 
     private enum SessionsRow: Equatable {
@@ -116,6 +129,8 @@ final class MainWindow {
 
         let notebookListBox = ListBox()
         let notebookRow = ListBoxRow()
+        let missionsListBox = ListBox()
+        let missionsHeaderRow = ListBoxRow()
         let sessionsList = ListBox()
         let packagesList = ListBox()
         let packagesSection = Box(orientation: .vertical, spacing: 0)
@@ -123,6 +138,8 @@ final class MainWindow {
         let eventStreamPane = EventStreamPane()
         self.notebookListBox = notebookListBox
         self.notebookRow = notebookRow
+        self.missionsListBox = missionsListBox
+        self.missionsHeaderRow = missionsHeaderRow
         self.sessionsList = sessionsList
         self.packagesList = packagesList
         self.packagesSection = packagesSection
@@ -434,6 +451,16 @@ final class MainWindow {
         }
         engine.populateSessionList()
         renderPackages(engine.installedPackages)
+        let initialUIState = (try? engine.store.fetchProjectUIState()) ?? ProjectUIState()
+        let store = engine.store
+        projectUIStateBox = ProjectUIStateBox(value: initialUIState) { state in
+            try? store.save(state)
+        }
+        let initialMissions = (try? store.fetchMissions()) ?? []
+        renderMissions(initialMissions)
+        engine.onMissionsChanged = { [weak self] missions in
+            self?.renderMissions(missions)
+        }
         eventStreamPane.attach(engine: engine)
         eventStreamPane.onNavigateToHook = { [weak self] sessionID, instrumentID, hookID in
             self?.navigateToHook(sessionID: sessionID, instrumentID: instrumentID, hookID: hookID)
@@ -599,6 +626,7 @@ final class MainWindow {
         column.vexpand = true
 
         column.append(child: buildNotebookSection())
+        column.append(child: buildMissionsSection())
         column.append(child: buildSessionsSection())
         column.append(child: buildCustomInstrumentsSection())
         column.append(child: buildPackagesSection())
@@ -637,6 +665,286 @@ final class MainWindow {
         let wrapper = Box(orientation: .vertical, spacing: 0)
         wrapper.append(child: notebookListBox)
         return wrapper
+    }
+
+    private func buildMissionsSection() -> Box {
+        missionsListBox.selectionMode = .single
+        missionsListBox.add(cssClass: "navigation-sidebar")
+        missionsListBox.onRowSelected { [weak self] _, row in
+            MainActor.assumeIsolated {
+                guard let self, let row else { return }
+                self.handleMissionsRowSelected(rowIndex: Int(row.index))
+            }
+        }
+        missionsListBox.onRowActivated { [weak self] _, row in
+            MainActor.assumeIsolated {
+                self?.handleMissionsRowSelected(rowIndex: Int(row.index))
+            }
+        }
+
+        installMissionsHeaderRow()
+        missionsListBox.append(child: missionsHeaderRow)
+
+        let column = Box(orientation: .vertical, spacing: 0)
+        column.append(child: missionsListBox)
+        return column
+    }
+
+    private func renderMissions(_ snapshot: [Mission]) {
+        let visibleMissions = snapshot.filter { $0.providerID != "external" }
+        missions = visibleMissions
+        missionRowIDs = visibleMissions.map(\.id)
+
+        while let row = missionsListBox.getRowAt(index: 1) {
+            missionsListBox.remove(child: row)
+        }
+
+        for mission in visibleMissions {
+            let row = makeMissionSidebarRow(mission)
+            row.visible = missionsExpanded
+            missionsListBox.append(child: row)
+        }
+
+        missionsExpansionButton.visible = !visibleMissions.isEmpty
+
+        currentMissionsListPane?.updateMissions(visibleMissions)
+
+        if case .mission(let id) = selection {
+            if let mission = visibleMissions.first(where: { $0.id == id }) {
+                currentMissionDetailPane?.updateMission(mission)
+            } else {
+                select(.missionsList)
+            }
+        }
+    }
+
+    private func makeMissionsListPane() -> MissionsListPane {
+        guard let engine else { fatalError("Engine not attached") }
+        let pane = MissionsListPane(
+            engine: engine,
+            onSelectMission: { [weak self] id in
+                self?.select(.mission(id))
+            },
+            onNewMission: { [weak self] in
+                self?.openNewMissionDialog()
+            },
+            onCopied: { [weak self] message in
+                self?.showToast(message, durationSeconds: 1.5)
+            }
+        )
+        pane.updateMissions(missions)
+        return pane
+    }
+
+    private func makeMissionDetailPane(for mission: Mission) -> MissionDetailPane {
+        guard let engine else { fatalError("Engine not attached") }
+        return MissionDetailPane(
+            engine: engine,
+            mission: mission,
+            parentWindow: window,
+            onCopied: { [weak self] message in
+                self?.showToast(message, durationSeconds: 1.5)
+            },
+            onAddNotebookEntry: { [weak self] entry in
+                self?.engine?.addNotebookEntry(entry)
+                self?.showToast("Added to notebook")
+            }
+        )
+    }
+
+    private func installMissionsHeaderRow() {
+        let box = Box(orientation: .horizontal, spacing: 8)
+        box.marginStart = 12
+        box.marginEnd = 6
+        box.marginTop = 6
+        box.marginBottom = 6
+
+        let icon = Gtk.Image(iconName: "applications-engineering-symbolic")
+        icon.pixelSize = 16
+        icon.add(cssClass: "accent")
+        box.append(child: icon)
+
+        let label = Label(str: "Missions")
+        label.halign = .start
+        label.hexpand = true
+        box.append(child: label)
+
+        let chevron = Gtk.Image(iconName: "pan-down-symbolic")
+        chevron.pixelSize = 12
+        chevron.add(cssClass: "dim-label")
+        missionsExpansionChevron = chevron
+
+        let chevronButton = Button()
+        chevronButton.set(child: chevron)
+        chevronButton.add(cssClass: "flat")
+        chevronButton.add(cssClass: "circular")
+        chevronButton.tooltipText = "Hide missions"
+        chevronButton.visible = false
+        chevronButton.onClicked { [weak self] _ in
+            MainActor.assumeIsolated { self?.toggleMissionsExpansion() }
+        }
+        missionsExpansionButton = chevronButton
+        box.append(child: chevronButton)
+
+        missionsHeaderRow.set(child: box)
+    }
+
+    private func makeMissionSidebarRow(_ mission: Mission) -> ListBoxRow {
+        let row = ListBoxRow()
+        let box = Box(orientation: .horizontal, spacing: 8)
+        box.marginStart = 28
+        box.marginEnd = 12
+        box.marginTop = 4
+        box.marginBottom = 4
+
+        let avatarSeed = mission.title?.isEmpty == false ? mission.title! : mission.goalText
+        let avatar = Adw.Avatar(size: 18, text: avatarSeed, showInitials: true)
+        box.append(child: avatar)
+
+        let column = Box(orientation: .vertical, spacing: 1)
+        column.hexpand = true
+
+        let title = Label(str: missionDisplayTitle(mission))
+        title.halign = .start
+        title.ellipsize = EllipsizeMode.end
+        title.maxWidthChars = 26
+        title.xalign = 0
+        column.append(child: title)
+
+        let subtitle = Label(str: missionSubtitleText(mission))
+        subtitle.halign = .start
+        subtitle.add(cssClass: "dim-label")
+        subtitle.add(cssClass: "caption")
+        subtitle.ellipsize = EllipsizeMode.end
+        subtitle.maxWidthChars = 26
+        subtitle.xalign = 0
+        column.append(child: subtitle)
+
+        box.append(child: column)
+
+        let statusIndicator = makeMissionStatusDot(for: mission)
+        statusIndicator.valign = .center
+        box.append(child: statusIndicator)
+
+        row.set(child: box)
+        attachMissionContextMenu(row: row, anchor: box, mission: mission)
+        return row
+    }
+
+    private func openNewMissionDialog() {
+        guard let engine, let projectUIStateBox else { return }
+        let dialog = NewMissionDialog(
+            parent: window,
+            engine: engine,
+            uiState: projectUIStateBox
+        ) { [weak self] mission in
+            guard let self else { return }
+            self.select(.mission(mission.id))
+            self.showToast("Mission started")
+        }
+        dialog.present()
+    }
+
+    private func handleMissionsRowSelected(rowIndex: Int) {
+        if rowIndex == 0 {
+            select(.missionsList)
+        } else {
+            select(.mission(missionRowIDs[rowIndex - 1]))
+        }
+    }
+
+    private func toggleMissionsExpansion() {
+        missionsExpanded.toggle()
+        let iconName = missionsExpanded ? "pan-down-symbolic" : "pan-end-symbolic"
+        missionsExpansionChevron.set(name: iconName)
+        missionsExpansionButton.tooltipText = missionsExpanded ? "Hide missions" : "Show missions"
+        for index in missionRowIDs.indices {
+            missionsListBox.getRowAt(index: index + 1)?.visible = missionsExpanded
+        }
+    }
+
+    private func missionDisplayTitle(_ mission: Mission) -> String {
+        if let title = mission.title, !title.isEmpty { return title }
+        let trimmed = mission.goalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Mission" : firstLine(of: trimmed, max: 40)
+    }
+
+    private func missionSubtitleText(_ mission: Mission) -> String {
+        switch mission.status {
+        case .running: return "Running…"
+        case .awaitingApproval: return "Awaiting approval"
+        case .paused: return "Paused"
+        case .completed: return "Completed · \(RelativeTime.string(from: mission.updatedAt))"
+        case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
+        case .drafting: return "Drafting"
+        }
+    }
+
+    private func makeMissionStatusDot(for mission: Mission) -> Label {
+        let color = MissionPalette.color(for: mission.status)
+        let label = Label(str: "")
+        label.useMarkup = true
+        label.setMarkup(str: "<span foreground=\"\(color.hex)\">●</span>")
+        label.tooltipText = MissionPalette.label(for: mission.status)
+        return label
+    }
+
+    private func attachMissionContextMenu(
+        row: ListBoxRow,
+        anchor: Widget,
+        mission: Mission
+    ) {
+        let click = GestureClick()
+        click.set(button: 3)
+        click.onPressed { [weak self, anchor] _, _, x, y in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.presentMissionContextMenu(anchor: anchor, x: x, y: y, mission: mission)
+            }
+        }
+        row.install(controller: click)
+    }
+
+    private func firstLine(of text: String, max: Int) -> String {
+        let firstLine = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? text
+        if firstLine.count <= max { return firstLine }
+        return String(firstLine.prefix(max - 1)) + "…"
+    }
+
+    private func presentMissionContextMenu(
+        anchor: Widget,
+        x: Double,
+        y: Double,
+        mission: Mission
+    ) {
+        var sections: [[ContextMenu.Item]] = []
+        if mission.status.isLive {
+            sections.append([
+                .init("Stop Mission") { [weak self] in
+                    self?.engine?.cancelMission(missionID: mission.id)
+                }
+            ])
+        }
+        sections.append([
+            .init("Delete Mission", destructive: true) { [weak self] in
+                self?.confirmDeleteMission(mission)
+            }
+        ])
+        ContextMenu.present(sections, at: anchor, x: x, y: y)
+    }
+
+    private func confirmDeleteMission(_ mission: Mission) {
+        let title = mission.title?.isEmpty == false ? mission.title! : "this mission"
+        confirmDestructive(
+            message: "Delete \(title)?",
+            detail: "This removes the mission and its history from the project.",
+            destructiveLabel: "Delete"
+        ) { [weak self] in
+            self?.engine?.deleteMission(missionID: mission.id)
+            self?.showToast("Mission deleted")
+        }
     }
 
     private func buildSessionsSection() -> Box {
@@ -983,6 +1291,20 @@ final class MainWindow {
         } else {
             currentCustomInstrumentDefPane = nil
         }
+        if case .mission(let id) = selection {
+            if currentMissionDetailPane?.missionID != id {
+                currentMissionDetailPane?.stop()
+                currentMissionDetailPane = nil
+            }
+        } else {
+            currentMissionDetailPane?.stop()
+            currentMissionDetailPane = nil
+        }
+        if case .missionsList = selection {
+            // keep current
+        } else {
+            currentMissionsListPane = nil
+        }
         let widget: Widget
         switch selection {
         case .notebook:
@@ -1104,6 +1426,30 @@ final class MainWindow {
                     icon: "package-x-generic-symbolic",
                     title: "Package unavailable",
                     subtitle: "This package is no longer installed."
+                )
+            }
+        case .missionsList:
+            let pane = currentMissionsListPane ?? makeMissionsListPane()
+            pane.refreshExternalMCP()
+            currentMissionsListPane = pane
+            widget = pane.widget
+        case .mission(let id):
+            if let mission = missions.first(where: { $0.id == id }) ?? (try? engine?.store.fetchMission(id: id)).flatMap({ $0 }) {
+                let pane: MissionDetailPane
+                if let existing = currentMissionDetailPane, existing.missionID == id {
+                    pane = existing
+                    pane.updateMission(mission)
+                } else {
+                    pane = makeMissionDetailPane(for: mission)
+                    pane.start()
+                    currentMissionDetailPane = pane
+                }
+                widget = pane.widget
+            } else {
+                widget = MainWindow.makeEmptyState(
+                    icon: "applications-engineering-symbolic",
+                    title: "Mission unavailable",
+                    subtitle: "This mission is no longer in the project."
                 )
             }
         }
@@ -1384,11 +1730,13 @@ final class MainWindow {
             sessionsList.unselectAll()
             packagesList.unselectAll()
             customInstrumentsList.unselectAll()
+            missionsListBox.unselectAll()
             notebookListBox.select(row: notebookRow)
         case .session, .repl, .instrument, .insight, .itrace:
             notebookListBox.unselectAll()
             packagesList.unselectAll()
             customInstrumentsList.unselectAll()
+            missionsListBox.unselectAll()
             if let idx = currentSelectionRowIndex(),
                 let row = sessionsList.getRowAt(index: idx)
             {
@@ -1398,14 +1746,32 @@ final class MainWindow {
             notebookListBox.unselectAll()
             sessionsList.unselectAll()
             customInstrumentsList.unselectAll()
+            missionsListBox.unselectAll()
         case .customInstrumentDef(let defID):
             notebookListBox.unselectAll()
             sessionsList.unselectAll()
             packagesList.unselectAll()
+            missionsListBox.unselectAll()
             if let idx = customInstrumentDefs.firstIndex(where: { $0.id == defID }),
                 let row = customInstrumentsList.getRowAt(index: idx)
             {
                 customInstrumentsList.select(row: row)
+            }
+        case .missionsList:
+            notebookListBox.unselectAll()
+            sessionsList.unselectAll()
+            packagesList.unselectAll()
+            customInstrumentsList.unselectAll()
+            missionsListBox.select(row: missionsHeaderRow)
+        case .mission(let id):
+            notebookListBox.unselectAll()
+            sessionsList.unselectAll()
+            packagesList.unselectAll()
+            customInstrumentsList.unselectAll()
+            if let idx = missionRowIDs.firstIndex(of: id),
+                let row = missionsListBox.getRowAt(index: idx + 1)
+            {
+                missionsListBox.select(row: row)
             }
         }
         updateResumeButtonVisibility()

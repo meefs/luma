@@ -287,6 +287,66 @@ enum StyleSheet {
         border-radius: 50%;
         padding: 1px;
     }
+
+    .luma-mission-pill {
+        background-color: alpha(currentColor, 0.18);
+        border-radius: 999px;
+        padding: 1px 8px;
+        margin: 0;
+    }
+
+    .card.luma-mission-card {
+        border-radius: 10px;
+        background-clip: padding-box;
+    }
+    .card.luma-mission-card-assistant {
+        background-color: alpha(@accent_bg_color, 0.07);
+        border: 1px solid alpha(@accent_bg_color, 0.30);
+    }
+    .card.luma-mission-card-user {
+        background-color: alpha(#9c5cd0, 0.08);
+        border: 1px solid alpha(#9c5cd0, 0.32);
+    }
+    .card.luma-mission-card-tool {
+        background-color: alpha(#e58a1f, 0.07);
+        border: 1px solid alpha(#e58a1f, 0.32);
+    }
+
+    .luma-mission-tool-use {
+        padding: 6px 8px;
+        border-radius: 8px;
+        background-color: alpha(@theme_fg_color, 0.04);
+    }
+
+    label.luma-mission-code {
+        background-color: alpha(@theme_fg_color, 0.06);
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-family: monospace;
+    }
+
+    .card.luma-mission-queue-card {
+        border-radius: 10px;
+        background-color: alpha(@theme_fg_color, 0.04);
+        border: 1px solid alpha(@theme_fg_color, 0.12);
+    }
+
+    .card.luma-mission-queue-input-card {
+        border-radius: 10px;
+        background-color: alpha(@accent_bg_color, 0.08);
+        border: 1px solid alpha(@accent_bg_color, 0.40);
+    }
+
+    .card.luma-mission-finding-card {
+        border-radius: 10px;
+        background-color: alpha(@theme_fg_color, 0.04);
+        border: 1px solid alpha(@theme_fg_color, 0.12);
+    }
+
+    .luma-mission-input-bar {
+        border-top: 1px solid alpha(@theme_fg_color, 0.18);
+        background-color: @theme_bg_color;
+    }
     """
 
     static func install() {

@@ -79,6 +79,7 @@ public final class Engine {
     @ObservationIgnored public var onNotebookChanged: (@MainActor (NotebookChange) -> Void)?
     @ObservationIgnored public var onInstalledPackagesChanged: (@MainActor ([InstalledPackage]) -> Void)?
     @ObservationIgnored public var onUserNotification: (@MainActor (UserNotification) -> Void)?
+    @ObservationIgnored public var onMissionsChanged: (@MainActor ([Mission]) -> Void)?
     @ObservationIgnored private var sessionsObservation: StoreObservation?
     @ObservationIgnored private var notebookObservation: StoreObservation?
     @ObservationIgnored private var instrumentsObservation: StoreObservation?
@@ -196,7 +197,11 @@ public final class Engine {
         llmRegistry.register(LocalOpenAICompatibleProvider())
         MissionTools.registerStandard(in: missionTools, engine: self)
         missionsObservation = store.observeMissions { [weak self] missions in
-            Task { @MainActor in self?.missions = missions }
+            Task { @MainActor in
+                guard let self else { return }
+                self.missions = missions
+                self.onMissionsChanged?(missions)
+            }
         }
     }
 

@@ -15,12 +15,14 @@ struct MissionsListView: View {
                 Text("Missions")
                     .font(.title2.bold())
                 Spacer()
-                Button {
-                    isShowingNewSheet = true
-                } label: {
-                    Label("New Mission", systemImage: "plus.circle.fill")
+                if !missions.isEmpty {
+                    Button {
+                        isShowingNewSheet = true
+                    } label: {
+                        Label("New Mission", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal)
             .padding(.top)
@@ -30,11 +32,18 @@ struct MissionsListView: View {
                 .padding(.top, 8)
 
             if missions.isEmpty {
-                ContentUnavailableView(
-                    "No missions yet",
-                    systemImage: "scope",
-                    description: Text("Click \"New Mission\" to give the agent a goal to work on.")
-                )
+                ContentUnavailableView {
+                    Label("No missions yet", systemImage: "scope")
+                } description: {
+                    Text("Give the agent a goal to work on.")
+                } actions: {
+                    Button {
+                        isShowingNewSheet = true
+                    } label: {
+                        Label("New Mission", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
