@@ -15,7 +15,11 @@ interface TracerHookConfig {
     isEnabled: boolean;
     code: string;
     isPinned?: boolean;
-    itraceEnabled?: boolean;
+    itraceArming?: ITraceArming;
+}
+
+interface ITraceArming {
+    maxInvocations: number;
 }
 
 type HookID = string;
@@ -99,7 +103,7 @@ class Tracer {
                 const config = existing[1];
                 if (config.code === hookConfig.code &&
                     config.isEnabled === hookConfig.isEnabled &&
-                    config.itraceEnabled === hookConfig.itraceEnabled &&
+                    JSON.stringify(config.itraceArming ?? null) === JSON.stringify(hookConfig.itraceArming ?? null) &&
                     JSON.stringify(config.addressAnchor) === JSON.stringify(hookConfig.addressAnchor)) {
                     continue;
                 }
@@ -152,7 +156,7 @@ class Tracer {
     }
 
     #attachNativeFunctionHook(hookConfig: TracerHookConfig, target: NativePointer, handlers: FunctionHandlers): FunctionHook {
-        if (hookConfig.itraceEnabled) {
+        if (hookConfig.itraceArming !== undefined) {
             const backup = target.readByteArray(64);
             if (backup !== null) {
                 this.#prologueBackups.set(target.toString(), backup);
@@ -225,21 +229,24 @@ class Tracer {
             onEnter(args) {
                 const [_, config, onEnter, __] = hook;
 
-                if (config.itraceEnabled) {
+                const arming = config.itraceArming;
+                if (arming !== undefined) {
                     const callIndex = tracer.#nextCallIndex(config.id);
-                    const target = tracer.#hookTargets.get(config.id);
-                    const prologueBackup = target !== undefined
-                        ? tracer.#prologueBackups.get(target.toString()) ?? null
-                        : null;
-                    const sessionId = `${config.id}:${callIndex}`;
-                    (this as any)._itraceSessionId = sessionId;
-                    startSession({
-                        sessionId,
-                        origin: { kind: "functionCall", hookId: config.id, callIndex },
-                        target: { type: "thread", threadId: this.threadId },
-                        hookTarget: target?.toString() ?? null,
-                        prologueBytes: prologueBackup,
-                    });
+                    if (arming.maxInvocations < 0 || callIndex < arming.maxInvocations) {
+                        const target = tracer.#hookTargets.get(config.id);
+                        const prologueBackup = target !== undefined
+                            ? tracer.#prologueBackups.get(target.toString()) ?? null
+                            : null;
+                        const sessionId = `${config.id}:${callIndex}`;
+                        (this as any)._itraceSessionId = sessionId;
+                        startSession({
+                            sessionId,
+                            origin: { kind: "functionCall", hookId: config.id, callIndex },
+                            target: { type: "thread", threadId: this.threadId },
+                            hookTarget: target?.toString() ?? null,
+                            prologueBytes: prologueBackup,
+                        });
+                    }
                 }
 
                 tracer.#invokeNativeHandler(onEnter, config, this, args, ">");

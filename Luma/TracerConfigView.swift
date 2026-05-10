@@ -438,7 +438,16 @@ struct TracerConfigView: View {
                 if selectedHookIsFunctionHook {
                     Toggle("ITrace", isOn: bindingForSelectedHookITrace())
                         .toggleStyle(.switch)
-                        .help("Capture instruction trace for each call")
+                        .help("Capture instruction trace for each call up to the arming cap")
+
+                    if let arming = selectedHook?.itraceArming, let hook = selectedHook {
+                        Stepper(value: bindingForSelectedHookITraceMax(), in: 1...100) {
+                            Text("\(itraceCaptured(for: hook.id)) / \(arming.maxInvocations)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .controlSize(.small)
+                    }
                 }
             }
 
@@ -713,15 +722,40 @@ struct TracerConfigView: View {
         Binding(
             get: {
                 guard let hook = selectedHook else { return false }
-                return config.hooks.first(where: { $0.id == hook.id })?.itraceEnabled ?? false
+                return config.hooks.first(where: { $0.id == hook.id })?.itraceArming != nil
             },
             set: { newValue in
                 guard let hook = selectedHook,
                     let idx = config.hooks.firstIndex(where: { $0.id == hook.id })
                 else { return }
-                config.hooks[idx].itraceEnabled = newValue
+                config.hooks[idx].itraceArming = newValue ? ITraceArming() : nil
             }
         )
+    }
+
+    private func bindingForSelectedHookITraceMax() -> Binding<Int> {
+        Binding(
+            get: {
+                guard let hook = selectedHook else { return ITraceArming.defaultMaxInvocations }
+                return config.hooks.first(where: { $0.id == hook.id })?.itraceArming?.maxInvocations
+                    ?? ITraceArming.defaultMaxInvocations
+            },
+            set: { newValue in
+                guard let hook = selectedHook,
+                    let idx = config.hooks.firstIndex(where: { $0.id == hook.id }),
+                    config.hooks[idx].itraceArming != nil
+                else { return }
+                config.hooks[idx].itraceArming = ITraceArming(maxInvocations: max(1, newValue))
+            }
+        )
+    }
+
+    private func itraceCaptured(for hookID: UUID) -> Int {
+        guard let session = instrumentSession else { return 0 }
+        let traces = workspace.engine.tracesBySession[session.id] ?? []
+        return traces.reduce(into: 0) { count, trace in
+            if case .functionCall(let id, _) = trace.origin, id == hookID { count += 1 }
+        }
     }
 
     private func bindingForSelectedHookEnabled() -> Binding<Bool> {
@@ -938,7 +972,7 @@ private struct HooksListView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Text(hook.displayName)
-                            if hook.itraceEnabled {
+                            if hook.itraceArming != nil {
                                 Text("IT")
                                     .font(.system(.caption2, design: .monospaced).bold())
                                     .foregroundStyle(.white)

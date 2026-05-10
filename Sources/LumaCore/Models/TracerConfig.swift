@@ -5,6 +5,16 @@ public enum TracerHookKind: String, Codable, Sendable {
     case function
 }
 
+public struct ITraceArming: Codable, Equatable, Sendable {
+    public static let defaultMaxInvocations: Int = 5
+
+    public var maxInvocations: Int
+
+    public init(maxInvocations: Int = ITraceArming.defaultMaxInvocations) {
+        self.maxInvocations = maxInvocations
+    }
+}
+
 public struct TracerConfig: Codable, Equatable, Sendable {
     public struct Hook: Codable, Equatable, Identifiable, Sendable {
         public var id: UUID
@@ -21,7 +31,7 @@ public struct TracerConfig: Codable, Equatable, Sendable {
 
         public var isPinned: Bool
 
-        public var itraceEnabled: Bool
+        public var itraceArming: ITraceArming?
 
         public init(
             id: UUID = UUID(),
@@ -31,7 +41,7 @@ public struct TracerConfig: Codable, Equatable, Sendable {
             isEnabled: Bool = true,
             code: String,
             isPinned: Bool = false,
-            itraceEnabled: Bool = false
+            itraceArming: ITraceArming? = nil
         ) {
             self.id = id
             self.displayName = displayName
@@ -40,7 +50,7 @@ public struct TracerConfig: Codable, Equatable, Sendable {
             self.isEnabled = isEnabled
             self.code = code
             self.isPinned = isPinned
-            self.itraceEnabled = itraceEnabled
+            self.itraceArming = itraceArming
         }
     }
 
@@ -74,8 +84,8 @@ public struct TracerConfig: Codable, Equatable, Sendable {
                     dict["isPinned"] = true
                 }
 
-                if hook.itraceEnabled {
-                    dict["itraceEnabled"] = true
+                if let arming = hook.itraceArming {
+                    dict["itraceArming"] = ["maxInvocations": arming.maxInvocations] as JSONObject
                 }
 
                 return dict

@@ -713,14 +713,7 @@ public enum MissionTools {
                 return makeResult(jsonObject: [], summary: "No tracer instrument on this session")
             }
             let array: [[String: Any]] = hooks.map { hook in
-                [
-                    "hook_id": hook.id.uuidString,
-                    "display_name": hook.displayName,
-                    "kind": hook.kind.rawValue,
-                    "is_enabled": hook.isEnabled,
-                    "is_pinned": hook.isPinned,
-                    "itrace_enabled": hook.itraceEnabled,
-                ]
+                hookListEntry(hook)
             }
             return makeResult(jsonObject: array, summary: "\(hooks.count) tracer hook\(hooks.count == 1 ? "" : "s")")
         }
@@ -746,15 +739,8 @@ public enum MissionTools {
             guard let hook = engine.tracerHook(sessionID: sessionID, hookID: hookID) else {
                 return errorResult("no tracer hook with id \(hookID)")
             }
-            let payload: [String: Any] = [
-                "hook_id": hook.id.uuidString,
-                "display_name": hook.displayName,
-                "kind": hook.kind.rawValue,
-                "is_enabled": hook.isEnabled,
-                "is_pinned": hook.isPinned,
-                "itrace_enabled": hook.itraceEnabled,
-                "code": hook.code,
-            ]
+            var payload = hookListEntry(hook)
+            payload["code"] = hook.code
             return makeResult(jsonObject: payload, summary: "Hook \(hook.displayName)")
         }
     }
@@ -762,9 +748,9 @@ public enum MissionTools {
     private static func registerUpdateTracerHook(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "update_tracer_hook",
-            description: "Update one or more fields of a tracer hook. Only fields you pass are changed. Pass 'code' to swap the JS handler.",
+            description: "Update one or more fields of a tracer hook. Only fields you pass change. Pass 'code' to swap the JS handler. Pass 'itrace_arming' to arm instruction tracing for this hook with a max-invocations safety cap (e.g. {\"max_invocations\": 5}); pass null to disarm. Tracing always self-disarms when the cap is reached.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"session_id":{"type":"string"},"hook_id":{"type":"string"},"code":{"type":"string"},"display_name":{"type":"string"},"is_enabled":{"type":"boolean"},"is_pinned":{"type":"boolean"},"itrace_enabled":{"type":"boolean"}},"required":["session_id","hook_id"],"additionalProperties":false}
+                {"type":"object","properties":{"session_id":{"type":"string"},"hook_id":{"type":"string"},"code":{"type":"string"},"display_name":{"type":"string"},"is_enabled":{"type":"boolean"},"is_pinned":{"type":"boolean"},"itrace_arming":{"type":["object","null"],"properties":{"max_invocations":{"type":"integer","minimum":1,"default":5}},"additionalProperties":false}},"required":["session_id","hook_id"],"additionalProperties":false}
                 """,
             isObserve: false,
             requiresSession: true
@@ -780,26 +766,38 @@ public enum MissionTools {
             let displayName = invocation.args["display_name"] as? String
             let isEnabled = invocation.args["is_enabled"] as? Bool
             let isPinned = invocation.args["is_pinned"] as? Bool
-            let itraceEnabled = invocation.args["itrace_enabled"] as? Bool
+            let armingArg = invocation.args["itrace_arming"]
 
             guard let updated = await engine.updateTracerHook(sessionID: sessionID, hookID: hookID, { hook in
                 if let code { hook.code = code }
                 if let displayName { hook.displayName = displayName }
                 if let isEnabled { hook.isEnabled = isEnabled }
                 if let isPinned { hook.isPinned = isPinned }
-                if let itraceEnabled { hook.itraceEnabled = itraceEnabled }
+                if armingArg is NSNull {
+                    hook.itraceArming = nil
+                } else if let armingObj = armingArg as? [String: Any] {
+                    let max = (armingObj["max_invocations"] as? Int) ?? ITraceArming.defaultMaxInvocations
+                    hook.itraceArming = ITraceArming(maxInvocations: max)
+                }
             }) else {
                 return errorResult("no tracer hook with id \(hookID)")
             }
-            let payload: [String: Any] = [
-                "hook_id": updated.id.uuidString,
-                "display_name": updated.displayName,
-                "is_enabled": updated.isEnabled,
-                "is_pinned": updated.isPinned,
-                "itrace_enabled": updated.itraceEnabled,
-            ]
-            return makeResult(jsonObject: payload, summary: "Updated hook \(updated.displayName)")
+            return makeResult(jsonObject: hookListEntry(updated), summary: "Updated hook \(updated.displayName)")
         }
+    }
+
+    private static func hookListEntry(_ hook: TracerConfig.Hook) -> [String: Any] {
+        var entry: [String: Any] = [
+            "hook_id": hook.id.uuidString,
+            "display_name": hook.displayName,
+            "kind": hook.kind.rawValue,
+            "is_enabled": hook.isEnabled,
+            "is_pinned": hook.isPinned,
+        ]
+        if let arming = hook.itraceArming {
+            entry["itrace_arming"] = ["max_invocations": arming.maxInvocations]
+        }
+        return entry
     }
 
     private static func registerRemoveTracerHook(in catalog: ToolCatalog, engine: Engine) {
