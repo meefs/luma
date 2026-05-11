@@ -43,8 +43,16 @@ luma_svg_paintable_snapshot(GdkPaintable *paintable, GdkSnapshot *snapshot, doub
     LumaSvgPaintable *self = (LumaSvgPaintable *) paintable;
     graphene_rect_t bounds = GRAPHENE_RECT_INIT(0.0f, 0.0f, (float) width, (float) height);
     cairo_t *cr = gtk_snapshot_append_cairo(GTK_SNAPSHOT(snapshot), &bounds);
+#if LIBRSVG_CHECK_VERSION(2, 46, 0)
     RsvgRectangle viewport = { 0.0, 0.0, width, height };
     rsvg_handle_render_document(self->handle, cr, &viewport, NULL);
+#else
+    RsvgDimensionData dims;
+    rsvg_handle_get_dimensions(self->handle, &dims);
+    if (dims.width > 0 && dims.height > 0)
+        cairo_scale(cr, width / dims.width, height / dims.height);
+    rsvg_handle_render_cairo(self->handle, cr);
+#endif
     cairo_destroy(cr);
 }
 
