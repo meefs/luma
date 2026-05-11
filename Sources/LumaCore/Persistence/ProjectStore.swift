@@ -1081,12 +1081,6 @@ public final class ProjectStore: Sendable {
             t.column("event_stream_collapsed", .boolean).notNull().defaults(to: true)
             t.column("event_stream_bottom_height", .double).notNull().defaults(to: 0)
             t.column("collaboration_panel_visible", .boolean).notNull().defaults(to: false)
-            t.column("last_mission_provider_id", .text).notNull().defaults(to: "claude-code")
-            t.column("last_mission_model_id", .text).notNull().defaults(to: "default")
-            t.column("last_mission_token_budget_input", .integer).notNull().defaults(to: 250_000)
-            t.column("last_mission_token_budget_output", .integer).notNull().defaults(to: 32_000)
-            t.column("last_mission_thinking_enabled", .boolean).notNull().defaults(to: false)
-            t.column("last_mission_thinking_budget", .integer).notNull().defaults(to: 4_096)
         }
 
         try db.create(table: "target_picker_state", ifNotExists: true) { t in

@@ -4,10 +4,49 @@ import Foundation
 public final class LumaAppState {
     public static let shared: LumaAppState = LumaAppState(paths: .shared)
 
+    public struct MissionDefaults: Codable, Equatable, Sendable {
+        public var providerID: String
+        public var modelID: String
+        public var tokenBudgetInput: Int
+        public var tokenBudgetOutput: Int
+        public var thinkingEnabled: Bool
+        public var thinkingBudget: Int
+        public var reasoningEffort: String?
+
+        public init(
+            providerID: String,
+            modelID: String,
+            tokenBudgetInput: Int,
+            tokenBudgetOutput: Int,
+            thinkingEnabled: Bool,
+            thinkingBudget: Int,
+            reasoningEffort: String? = nil
+        ) {
+            self.providerID = providerID
+            self.modelID = modelID
+            self.tokenBudgetInput = tokenBudgetInput
+            self.tokenBudgetOutput = tokenBudgetOutput
+            self.thinkingEnabled = thinkingEnabled
+            self.thinkingBudget = thinkingBudget
+            self.reasoningEffort = reasoningEffort
+        }
+
+        public static let initial = MissionDefaults(
+            providerID: "claude-code",
+            modelID: "default",
+            tokenBudgetInput: 250_000,
+            tokenBudgetOutput: 32_000,
+            thinkingEnabled: false,
+            thinkingBudget: 4_096
+        )
+    }
+
     private struct Stored: Codable, Equatable {
         var untitledRelative: String?
         var externalAbsolute: String?
         var recentPaths: [String] = []
+        var providerBaseURLs: [String: String]?
+        var missionDefaults: MissionDefaults?
     }
 
     private var stored: Stored
@@ -84,6 +123,33 @@ public final class LumaAppState {
 
     public func isUntitledAutoSavePath(_ path: String) -> Bool {
         path.hasPrefix(paths.untitledDirectory.path + "/") || path == paths.untitledDirectory.path
+    }
+
+    public var missionDefaults: MissionDefaults {
+        get { stored.missionDefaults ?? .initial }
+        set {
+            guard stored.missionDefaults != newValue else { return }
+            stored.missionDefaults = newValue
+            persist()
+        }
+    }
+
+    public func providerBaseURL(providerID: String) -> String? {
+        stored.providerBaseURLs?[providerID]
+    }
+
+    public func setProviderBaseURL(_ value: String?, providerID: String) {
+        var map = stored.providerBaseURLs ?? [:]
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            map[providerID] = trimmed
+        } else {
+            map.removeValue(forKey: providerID)
+        }
+        let next: [String: String]? = map.isEmpty ? nil : map
+        guard stored.providerBaseURLs != next else { return }
+        stored.providerBaseURLs = next
+        persist()
     }
 
     private func persist() {

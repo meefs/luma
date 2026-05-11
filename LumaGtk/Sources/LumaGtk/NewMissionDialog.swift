@@ -23,10 +23,15 @@ final class NewMissionDialog {
     private let thinkingSwitch: Switch
     private let thinkingBudgetSpin: SpinButton
     private let thinkingBudgetRow: Box
+    private let thinkingSection: Box
+    private let reasoningDropdown: DropDown
+    private let reasoningRow: Box
     private let apiKeyEntry: Entry
     private let apiKeyRow: Box
     private let apiKeyChecking: Box
     private let apiKeyOnFile: Box
+    private let baseURLEntry: Entry
+    private let baseURLRow: Box
     private let startButton: Button
     private let cancelButton: Button
     private let footerError: Label
@@ -38,6 +43,9 @@ final class NewMissionDialog {
     private var hasStoredAPIKey: Bool = false
     private var checkingAPIKey: Bool = false
     private var isStarting: Bool = false
+    private var apiKeyDebounce: Task<Void, Never>?
+    private var reasoningEffortOptions: [String] = []
+    private var selectedReasoningEffort: String
 
     init(
         parent: Gtk.Window,
@@ -50,8 +58,10 @@ final class NewMissionDialog {
         self.workspaceUIState = uiState
         self.onCreated = onCreated
 
-        selectedProviderID = uiState.value.lastMissionProviderID
-        selectedModelID = uiState.value.lastMissionModelID
+        let defaults = LumaAppState.shared.missionDefaults
+        selectedProviderID = defaults.providerID
+        selectedModelID = defaults.modelID
+        selectedReasoningEffort = defaults.reasoningEffort ?? "auto"
 
         dialog = Adw.Dialog()
         dialog.set(title: "New Mission")
@@ -81,23 +91,27 @@ final class NewMissionDialog {
             max: 2_000_000,
             step: 10_000
         )
-        inputBudgetSpin.value = Double(uiState.value.lastMissionTokenBudgetInput)
+        inputBudgetSpin.value = Double(defaults.tokenBudgetInput)
 
         outputBudgetSpin = SpinButton(
             range: 1_000,
             max: 64_000,
             step: 1_000
         )
-        outputBudgetSpin.value = Double(uiState.value.lastMissionTokenBudgetOutput)
+        outputBudgetSpin.value = Double(defaults.tokenBudgetOutput)
 
         thinkingSwitch = Switch()
-        thinkingSwitch.active = uiState.value.lastMissionThinkingEnabled
+        thinkingSwitch.active = defaults.thinkingEnabled
         thinkingSwitch.valign = .center
 
         thinkingBudgetSpin = SpinButton(range: 1_024, max: 32_000, step: 1_024)
-        thinkingBudgetSpin.value = Double(uiState.value.lastMissionThinkingBudget)
+        thinkingBudgetSpin.value = Double(defaults.thinkingBudget)
 
         thinkingBudgetRow = Box(orientation: .horizontal, spacing: 12)
+        thinkingSection = Box(orientation: .vertical, spacing: 8)
+
+        reasoningDropdown = NewMissionDialog.makeStringDropdown(labels: [], selected: 0)
+        reasoningRow = Box(orientation: .horizontal, spacing: 12)
 
         apiKeyEntry = Entry()
         apiKeyEntry.hexpand = true
@@ -108,6 +122,11 @@ final class NewMissionDialog {
         apiKeyRow = Box(orientation: .vertical, spacing: 4)
         apiKeyChecking = Box(orientation: .horizontal, spacing: 8)
         apiKeyOnFile = Box(orientation: .horizontal, spacing: 8)
+
+        baseURLEntry = Entry()
+        baseURLEntry.hexpand = true
+        baseURLEntry.text = LumaAppState.shared.providerBaseURL(providerID: selectedProviderID) ?? ""
+        baseURLRow = Box(orientation: .vertical, spacing: 4)
 
         startButton = Button(label: "Start Mission")
         startButton.add(cssClass: "suggested-action")
@@ -152,6 +171,7 @@ final class NewMissionDialog {
                 let idx = Int(dropdown.selected)
                 guard idx >= 0, idx < self.providerIDs.count else { return }
                 self.selectedProviderID = self.providerIDs[idx]
+                self.apiKeyEntry.text = ""
                 self.applyProviderSelection(animatePicker: true)
             }
         }
@@ -170,8 +190,22 @@ final class NewMissionDialog {
                 return false
             }
         }
+        reasoningDropdown.onNotifySelected { [weak self] dropdown, _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let idx = Int(dropdown.selected)
+                guard idx >= 0, idx < self.reasoningEffortOptions.count else { return }
+                self.selectedReasoningEffort = self.reasoningEffortOptions[idx]
+            }
+        }
         apiKeyEntry.onChanged { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshStartSensitivity() }
+            MainActor.assumeIsolated {
+                self?.refreshStartSensitivity()
+                self?.scheduleAPIKeyRefresh()
+            }
+        }
+        baseURLEntry.onActivate { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyProviderSelection(animatePicker: true) }
         }
         if let buffer = goalView.buffer {
             buffer.onChanged { [weak self] _ in
@@ -214,6 +248,9 @@ final class NewMissionDialog {
 
         let modelGroup = Box(orientation: .vertical, spacing: 8)
         modelGroup.append(child: formRow(title: "Provider", control: providerDropdown))
+        baseURLRow.append(child: formRow(title: "Base URL", control: baseURLEntry))
+        modelGroup.append(child: baseURLRow)
+        baseURLRow.visible = false
         modelGroup.append(child: formRow(title: "Model", control: modelDropdown))
         let apiKeyHint = Label(
             str: "Stored under the app's data directory. Never written to the project document."
@@ -268,7 +305,7 @@ final class NewMissionDialog {
         thinkingLabel.hexpand = true
         thinkingHeader.append(child: thinkingLabel)
         thinkingHeader.append(child: thinkingSwitch)
-        budgetGroup.append(child: thinkingHeader)
+        thinkingSection.append(child: thinkingHeader)
 
         let thinkingTitle = Label(str: "Thinking budget")
         thinkingTitle.halign = .start
@@ -277,7 +314,12 @@ final class NewMissionDialog {
         thinkingBudgetSpin.hexpand = true
         thinkingBudgetSpin.halign = .end
         thinkingBudgetRow.append(child: thinkingBudgetSpin)
-        budgetGroup.append(child: thinkingBudgetRow)
+        thinkingSection.append(child: thinkingBudgetRow)
+        budgetGroup.append(child: thinkingSection)
+
+        reasoningRow.append(child: formRow(title: "Reasoning effort", control: reasoningDropdown))
+        budgetGroup.append(child: reasoningRow)
+        reasoningRow.visible = false
 
         outer.append(child: section(title: "Budget", child: budgetGroup, hint: nil))
 
@@ -387,58 +429,129 @@ final class NewMissionDialog {
             return
         }
         let descriptor = provider.descriptor
-        modelsForProvider = provider.suggestedModels()
-        let modelLabels = modelsForProvider.map(\.displayName)
-        var modelIndex = modelsForProvider.firstIndex(where: { $0.id == selectedModelID }) ?? -1
-        if modelIndex < 0 {
-            if let defaultID = descriptor.defaultModelID,
-                let i = modelsForProvider.firstIndex(where: { $0.id == defaultID })
-            {
-                modelIndex = i
-            } else {
-                modelIndex = modelsForProvider.isEmpty ? 0 : 0
-            }
-        }
-        if modelIndex >= 0, modelIndex < modelsForProvider.count {
-            selectedModelID = modelsForProvider[modelIndex].id
-        }
-        setDropdownLabels(modelDropdown, labels: modelLabels, selectedIndex: modelIndex)
 
+        let supportsCustomBaseURL = descriptor.capabilities.supportsCustomBaseURL
+        baseURLRow.visible = supportsCustomBaseURL
+        if supportsCustomBaseURL {
+            let stored = LumaAppState.shared.providerBaseURL(providerID: selectedProviderID) ?? ""
+            if (baseURLEntry.text ?? "") != stored {
+                baseURLEntry.text = stored
+            }
+            baseURLEntry.placeholderText = descriptor.defaultBaseURL.absoluteString
+        }
+        let configuredBaseURL = effectiveBaseURL()
         let requiresKey = descriptor.capabilities.requiresAPIKey
-        apiKeyRow.visible = requiresKey
-        apiKeyChecking.visible = false
-        apiKeyOnFile.visible = false
-        apiKeyEntry.text = ""
+        let typedKey = trimmedAPIKey
+
+        reasoningEffortOptions = descriptor.capabilities.reasoningEffortOptions
+        let hasReasoningOptions = !reasoningEffortOptions.isEmpty
+        reasoningRow.visible = hasReasoningOptions
+        if hasReasoningOptions {
+            if !reasoningEffortOptions.contains(selectedReasoningEffort) {
+                selectedReasoningEffort = descriptor.capabilities.defaultReasoningEffort ?? reasoningEffortOptions.first ?? "auto"
+            }
+            let idx = reasoningEffortOptions.firstIndex(of: selectedReasoningEffort) ?? 0
+            setDropdownLabels(reasoningDropdown, labels: reasoningEffortOptions, selectedIndex: idx)
+        }
+        apiKeyEntry.placeholderText = "API key for \(descriptor.displayName)"
+
+        thinkingSection.visible = !hasReasoningOptions && descriptor.capabilities.supportsThinking
+        if !thinkingSection.visible {
+            thinkingBudgetRow.visible = false
+        } else {
+            thinkingBudgetRow.visible = thinkingSwitch.active
+        }
+
+        modelsForProvider = []
         hasStoredAPIKey = false
+        apiKeyOnFile.visible = false
+        apiKeyRow.visible = false
 
         if requiresKey {
             checkingAPIKey = true
             apiKeyChecking.visible = true
-            apiKeyRow.visible = false
-            let providerID = selectedProviderID
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let credentials = engine.llmCredentials
-                let storedRaw = try? await credentials.apiKey(providerID: providerID)
-                let storedKey = (storedRaw ?? nil)
-                let hasKey = (storedKey?.isEmpty == false)
+        } else {
+            apiKeyChecking.visible = false
+        }
+        setDropdownLabels(modelDropdown, labels: ["Loading…"], selectedIndex: 0)
+
+        let providerID = selectedProviderID
+        let credentials = engine.llmCredentials
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let storedKey = (try? await credentials.apiKey(providerID: providerID)) ?? nil
+            let hasStored = (storedKey?.isEmpty == false)
+            guard self.selectedProviderID == providerID else { return }
+            self.applyAPIKeyStatus(requiresKey: requiresKey, hasStored: hasStored)
+
+            let effectiveKey = !typedKey.isEmpty ? typedKey : storedKey
+            let models: [LLMModelInfo]
+            do {
+                models = try await provider.suggestedModels(apiKey: effectiveKey, baseURL: configuredBaseURL)
+            } catch {
                 guard self.selectedProviderID == providerID else { return }
-                self.checkingAPIKey = false
-                self.apiKeyChecking.visible = false
-                if hasKey {
-                    self.hasStoredAPIKey = true
-                    self.apiKeyOnFile.visible = true
-                    self.apiKeyRow.visible = false
-                } else {
-                    self.hasStoredAPIKey = false
-                    self.apiKeyOnFile.visible = false
-                    self.apiKeyRow.visible = true
-                }
+                let hadKey = effectiveKey?.isEmpty == false
+                let label = requiresKey && !hadKey ? "Enter API key to load models" : "Failed to load models"
+                self.setDropdownLabels(self.modelDropdown, labels: [label], selectedIndex: 0)
                 self.refreshStartSensitivity()
+                return
             }
+            guard self.selectedProviderID == providerID else { return }
+            self.installModels(models, descriptor: descriptor)
+            if !typedKey.isEmpty, !hasStored {
+                try? await credentials.setAPIKey(typedKey, providerID: providerID)
+                guard self.selectedProviderID == providerID else { return }
+                self.applyAPIKeyStatus(requiresKey: requiresKey, hasStored: true)
+                self.apiKeyEntry.text = ""
+            }
+            self.refreshStartSensitivity()
         }
 
         refreshStartSensitivity()
+    }
+
+    private func scheduleAPIKeyRefresh() {
+        apiKeyDebounce?.cancel()
+        let key = trimmedAPIKey
+        guard key.isEmpty || key.count >= 16 else { return }
+        apiKeyDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            if Task.isCancelled { return }
+            self?.applyProviderSelection(animatePicker: true)
+        }
+    }
+
+    private func applyAPIKeyStatus(requiresKey: Bool, hasStored: Bool) {
+        checkingAPIKey = false
+        apiKeyChecking.visible = false
+        guard requiresKey else {
+            apiKeyRow.visible = false
+            apiKeyOnFile.visible = false
+            hasStoredAPIKey = false
+            return
+        }
+        hasStoredAPIKey = hasStored
+        apiKeyOnFile.visible = hasStored
+        apiKeyRow.visible = !hasStored
+    }
+
+    private func installModels(_ models: [LLMModelInfo], descriptor: LLMProviderDescriptor) {
+        modelsForProvider = models
+        let labels = models.map(\.displayName)
+        var index = models.firstIndex(where: { $0.id == selectedModelID }) ?? -1
+        if index < 0 {
+            if let defaultID = descriptor.defaultModelID,
+                let i = models.firstIndex(where: { $0.id == defaultID })
+            {
+                index = i
+            } else if !models.isEmpty {
+                index = 0
+            }
+        }
+        if index >= 0, index < models.count {
+            selectedModelID = models[index].id
+        }
+        setDropdownLabels(modelDropdown, labels: labels.isEmpty ? ["(no models)"] : labels, selectedIndex: max(0, index))
     }
 
     private func refreshStartSensitivity() {
@@ -449,7 +562,7 @@ final class NewMissionDialog {
         } else {
             providerOK = true
         }
-        startButton.sensitive = !isStarting && hasGoal && providerOK
+        startButton.sensitive = !isStarting && hasGoal && providerOK && !modelsForProvider.isEmpty
     }
 
     private var trimmedGoal: String {
@@ -472,13 +585,25 @@ final class NewMissionDialog {
         (apiKeyEntry.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var currentProviderSupportsCustomBaseURL: Bool {
+        engine?.llmRegistry.provider(id: selectedProviderID)?.descriptor.capabilities.supportsCustomBaseURL
+            ?? false
+    }
+
+    private func effectiveBaseURL() -> URL? {
+        guard currentProviderSupportsCustomBaseURL else { return nil }
+        let trimmed = (baseURLEntry.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(string: trimmed)
+    }
+
     private var currentProviderRequiresKey: Bool {
         engine?.llmRegistry.provider(id: selectedProviderID)?.descriptor.capabilities.requiresAPIKey
             ?? false
     }
 
     private func start() {
-        guard let engine, let uiState = workspaceUIState else { return }
+        guard let engine else { return }
         let goal = trimmedGoal
         guard !goal.isEmpty else { return }
 
@@ -488,6 +613,9 @@ final class NewMissionDialog {
         let outputBudget = Int(outputBudgetSpin.value)
         let thinkingEnabled = thinkingSwitch.active
         let thinkingBudget = Int(thinkingBudgetSpin.value)
+        let baseURLText = (baseURLEntry.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let supportsCustomBaseURL = currentProviderSupportsCustomBaseURL
+        let reasoningEffort = reasoningEffortOptions.isEmpty ? nil : selectedReasoningEffort
 
         isStarting = true
         startButton.sensitive = false
@@ -505,13 +633,17 @@ final class NewMissionDialog {
                 try? await engine.llmCredentials.setAPIKey(providedKey, providerID: providerID)
             }
 
-            uiState.update {
-                $0.lastMissionProviderID = providerID
-                $0.lastMissionModelID = modelID
-                $0.lastMissionTokenBudgetInput = inputBudget
-                $0.lastMissionTokenBudgetOutput = outputBudget
-                $0.lastMissionThinkingEnabled = thinkingEnabled
-                $0.lastMissionThinkingBudget = thinkingBudget
+            LumaAppState.shared.missionDefaults = .init(
+                providerID: providerID,
+                modelID: modelID,
+                tokenBudgetInput: inputBudget,
+                tokenBudgetOutput: outputBudget,
+                thinkingEnabled: thinkingEnabled,
+                thinkingBudget: thinkingBudget,
+                reasoningEffort: reasoningEffort
+            )
+            if supportsCustomBaseURL {
+                LumaAppState.shared.setProviderBaseURL(baseURLText, providerID: providerID)
             }
 
             let mission = engine.startMission(
@@ -520,7 +652,8 @@ final class NewMissionDialog {
                 modelID: modelID,
                 tokenBudgetInput: inputBudget,
                 tokenBudgetOutput: outputBudget,
-                thinkingBudget: thinkingEnabled ? thinkingBudget : 0
+                thinkingBudget: thinkingEnabled ? thinkingBudget : 0,
+                reasoningEffort: reasoningEffort
             )
             if let mission {
                 onCreated(mission)

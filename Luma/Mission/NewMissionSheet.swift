@@ -13,22 +13,31 @@ struct NewMissionSheet: View {
     @State private var tokenBudgetOutput: Int
     @State private var thinkingEnabled: Bool
     @State private var thinkingBudget: Int
+    @State private var reasoningEffort: String
+    @State private var baseURLInput: String = ""
     @State private var apiKey: String = ""
     @State private var hasStoredAPIKey: Bool = false
     @State private var checkingAPIKey: Bool = true
     @State private var isStarting = false
+    @State private var availableModels: [LLMModelInfo] = []
+    @State private var modelsLoading = false
+    @State private var modelsError: String?
+    @State private var modelsErrorIsMissingKey = false
+    @State private var apiKeyDebounce: Task<Void, Never>?
 
     init(workspace: Workspace, isPresented: Binding<Bool>, onCreated: @escaping (Mission) -> Void) {
         self.workspace = workspace
         self._isPresented = isPresented
         self.onCreated = onCreated
-        let state = workspace.projectUIState
-        self._selectedProviderID = State(initialValue: state.lastMissionProviderID)
-        self._selectedModelID = State(initialValue: state.lastMissionModelID)
-        self._tokenBudgetInput = State(initialValue: state.lastMissionTokenBudgetInput)
-        self._tokenBudgetOutput = State(initialValue: state.lastMissionTokenBudgetOutput)
-        self._thinkingEnabled = State(initialValue: state.lastMissionThinkingEnabled)
-        self._thinkingBudget = State(initialValue: state.lastMissionThinkingBudget)
+        let defaults = LumaAppState.shared.missionDefaults
+        self._selectedProviderID = State(initialValue: defaults.providerID)
+        self._selectedModelID = State(initialValue: defaults.modelID)
+        self._tokenBudgetInput = State(initialValue: defaults.tokenBudgetInput)
+        self._tokenBudgetOutput = State(initialValue: defaults.tokenBudgetOutput)
+        self._thinkingEnabled = State(initialValue: defaults.thinkingEnabled)
+        self._thinkingBudget = State(initialValue: defaults.thinkingBudget)
+        self._reasoningEffort = State(initialValue: defaults.reasoningEffort ?? "auto")
+        self._baseURLInput = State(initialValue: LumaAppState.shared.providerBaseURL(providerID: defaults.providerID) ?? "")
     }
 
     var body: some View {
@@ -52,9 +61,33 @@ struct NewMissionSheet: View {
                         }
                     }
 
-                    Picker("Model", selection: resolvedModelBinding) {
-                        ForEach(modelsForCurrentProvider(), id: \.id) { m in
-                            Text(m.displayName).tag(m.id)
+                    if currentProviderSupportsCustomBaseURL {
+                        TextField(baseURLPlaceholder, text: $baseURLInput)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .onSubmit { Task { await refreshModels() } }
+                    }
+
+                    LabeledContent("Model") {
+                        if modelsLoading {
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.7)
+                                Text("Loading…").foregroundStyle(.secondary)
+                            }
+                        } else if modelsErrorIsMissingKey {
+                            Text("Enter an API key to load models")
+                                .foregroundStyle(.secondary)
+                        } else if let modelsError {
+                            Label(modelsError, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .lineLimit(2)
+                        } else {
+                            Picker("", selection: resolvedModelBinding) {
+                                ForEach(availableModels, id: \.id) { m in
+                                    Text(m.displayName).tag(m.id)
+                                }
+                            }
+                            .labelsHidden()
                         }
                     }
 
@@ -62,7 +95,7 @@ struct NewMissionSheet: View {
                         if checkingAPIKey {
                             HStack { ProgressView().scaleEffect(0.7); Text("Checking saved API key…").foregroundStyle(.secondary) }
                         } else if !hasStoredAPIKey {
-                            SecureField("API key for \(selectedProviderID)", text: $apiKey)
+                            SecureField("API key for \(currentProviderDisplayName)", text: $apiKey)
                                 .textFieldStyle(.roundedBorder)
                             Text("Stored under the app's data directory. Never written to the project document.")
                                 .font(.caption)
@@ -76,9 +109,17 @@ struct NewMissionSheet: View {
                 Section("Budget") {
                     Stepper("Input tokens: \(tokenBudgetInput)", value: $tokenBudgetInput, in: 10_000...2_000_000, step: 10_000)
                     Stepper("Output tokens: \(tokenBudgetOutput)", value: $tokenBudgetOutput, in: 1_000...64_000, step: 1_000)
-                    Toggle("Extended thinking", isOn: $thinkingEnabled)
-                    if thinkingEnabled {
-                        Stepper("Thinking budget: \(thinkingBudget)", value: $thinkingBudget, in: 1_024...32_000, step: 1_024)
+                    if !reasoningEffortOptions.isEmpty {
+                        Picker("Reasoning effort", selection: $reasoningEffort) {
+                            ForEach(reasoningEffortOptions, id: \.self) { option in
+                                Text(option).tag(option)
+                            }
+                        }
+                    } else if currentProviderSupportsThinking {
+                        Toggle("Extended thinking", isOn: $thinkingEnabled)
+                        if thinkingEnabled {
+                            Stepper("Thinking budget: \(thinkingBudget)", value: $thinkingBudget, in: 1_024...32_000, step: 1_024)
+                        }
                     }
                 }
             }
@@ -97,20 +138,46 @@ struct NewMissionSheet: View {
             .padding()
         }
         .frame(minWidth: 560, minHeight: 600)
-        .task(id: selectedProviderID) { await refreshAPIKeyStatus() }
+        .task(id: selectedProviderID) {
+            baseURLInput = LumaAppState.shared.providerBaseURL(providerID: selectedProviderID) ?? ""
+            await refreshAPIKeyStatus()
+            await refreshModels()
+        }
+        .onChange(of: hasStoredAPIKey) { _, _ in Task { await refreshModels() } }
+        .onChange(of: apiKey) { _, _ in scheduleAPIKeyRefresh() }
         .onChange(of: selectedProviderID) { _, _ in
-            selectedModelID = workspace.engine.llmRegistry.provider(id: selectedProviderID)?.descriptor.defaultModelID ?? selectedModelID
+            let descriptor = workspace.engine.llmRegistry.provider(id: selectedProviderID)?.descriptor
+            selectedModelID = descriptor?.defaultModelID ?? selectedModelID
+            if let options = descriptor?.capabilities.reasoningEffortOptions, !options.contains(reasoningEffort) {
+                reasoningEffort = descriptor?.capabilities.defaultReasoningEffort ?? options.first ?? "auto"
+            }
         }
     }
 
-    private var canStart: Bool {
-        guard !goalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            !isStarting
-        else { return false }
-        if currentProviderRequiresKey {
-            return hasStoredAPIKey || !apiKey.isEmpty
-        }
-        return true
+    private var currentProviderSupportsCustomBaseURL: Bool {
+        workspace.engine.llmRegistry.provider(id: selectedProviderID)?
+            .descriptor.capabilities.supportsCustomBaseURL ?? false
+    }
+
+    private var baseURLPlaceholder: String {
+        let fallback = workspace.engine.llmRegistry.provider(id: selectedProviderID)?
+            .descriptor.defaultBaseURL.absoluteString ?? ""
+        return "Base URL (default: \(fallback))"
+    }
+
+    private var resolvedModelBinding: Binding<String> {
+        Binding(
+            get: {
+                if availableModels.contains(where: { $0.id == selectedModelID }) { return selectedModelID }
+                return availableModels.first?.id ?? selectedModelID
+            },
+            set: { selectedModelID = $0 }
+        )
+    }
+
+    private var currentProviderDisplayName: String {
+        workspace.engine.llmRegistry.provider(id: selectedProviderID)?
+            .descriptor.displayName ?? selectedProviderID
     }
 
     private var currentProviderRequiresKey: Bool {
@@ -118,19 +185,30 @@ struct NewMissionSheet: View {
             .descriptor.capabilities.requiresAPIKey ?? false
     }
 
-    private func modelsForCurrentProvider() -> [LLMModelInfo] {
-        workspace.engine.llmRegistry.provider(id: selectedProviderID)?.suggestedModels() ?? []
+    private var currentProviderSupportsThinking: Bool {
+        workspace.engine.llmRegistry.provider(id: selectedProviderID)?
+            .descriptor.capabilities.supportsThinking ?? false
     }
 
-    private var resolvedModelBinding: Binding<String> {
-        Binding(
-            get: {
-                let models = modelsForCurrentProvider()
-                if models.contains(where: { $0.id == selectedModelID }) { return selectedModelID }
-                return models.first?.id ?? selectedModelID
-            },
-            set: { selectedModelID = $0 }
-        )
+    private var reasoningEffortOptions: [String] {
+        workspace.engine.llmRegistry.provider(id: selectedProviderID)?
+            .descriptor.capabilities.reasoningEffortOptions ?? []
+    }
+
+    private var apiKeyLooksPlausible: Bool {
+        apiKey.trimmingCharacters(in: .whitespacesAndNewlines).count >= 16
+    }
+
+    private var canStart: Bool {
+        guard !goalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !isStarting,
+            !modelsLoading,
+            !availableModels.isEmpty
+        else { return false }
+        if currentProviderRequiresKey {
+            return hasStoredAPIKey || !apiKey.isEmpty
+        }
+        return true
     }
 
     private func refreshAPIKeyStatus() async {
@@ -149,6 +227,65 @@ struct NewMissionSheet: View {
         }
     }
 
+    private func scheduleAPIKeyRefresh() {
+        apiKeyDebounce?.cancel()
+        guard apiKey.isEmpty || apiKeyLooksPlausible else { return }
+        apiKeyDebounce = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            if Task.isCancelled { return }
+            await refreshModels()
+        }
+    }
+
+    private func refreshModels() async {
+        guard let provider = workspace.engine.llmRegistry.provider(id: selectedProviderID) else {
+            availableModels = []
+            modelsError = nil
+            modelsErrorIsMissingKey = false
+            return
+        }
+        let providerID = selectedProviderID
+        modelsLoading = true
+        modelsError = nil
+        modelsErrorIsMissingKey = false
+        defer { modelsLoading = false }
+        do {
+            let storedKey = (try? await workspace.engine.llmCredentials.apiKey(providerID: providerID)) ?? nil
+            let typedKey = apiKey
+            let effectiveKey = !typedKey.isEmpty ? typedKey : storedKey
+            let models = try await provider.suggestedModels(apiKey: effectiveKey, baseURL: effectiveBaseURL)
+            guard selectedProviderID == providerID else { return }
+            availableModels = models
+            if !models.contains(where: { $0.id == selectedModelID }) {
+                selectedModelID = provider.descriptor.defaultModelID ?? models.first?.id ?? selectedModelID
+            }
+            if !typedKey.isEmpty, !hasStoredAPIKey {
+                try? await workspace.engine.llmCredentials.setAPIKey(typedKey, providerID: providerID)
+                guard selectedProviderID == providerID else { return }
+                hasStoredAPIKey = true
+                apiKey = ""
+            }
+        } catch {
+            guard selectedProviderID == providerID else { return }
+            availableModels = []
+            let typedKey = apiKey
+            let hadKey = !typedKey.isEmpty || hasStoredAPIKey
+            if currentProviderRequiresKey, !hadKey {
+                modelsErrorIsMissingKey = true
+                modelsError = nil
+            } else {
+                modelsErrorIsMissingKey = false
+                modelsError = "Failed to load models: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private var effectiveBaseURL: URL? {
+        let trimmed = baseURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(string: trimmed)
+    }
+
     private func start() async {
         isStarting = true
         defer { isStarting = false }
@@ -165,7 +302,8 @@ struct NewMissionSheet: View {
             modelID: selectedModelID,
             tokenBudgetInput: tokenBudgetInput,
             tokenBudgetOutput: tokenBudgetOutput,
-            thinkingBudget: thinkingEnabled ? thinkingBudget : 0
+            thinkingBudget: thinkingEnabled ? thinkingBudget : 0,
+            reasoningEffort: reasoningEffortOptions.isEmpty ? nil : reasoningEffort
         )
         if let mission {
             onCreated(mission)
@@ -174,15 +312,17 @@ struct NewMissionSheet: View {
     }
 
     private func rememberDefaults() {
-        var state = workspace.projectUIState
-        state.lastMissionProviderID = selectedProviderID
-        state.lastMissionModelID = selectedModelID
-        state.lastMissionTokenBudgetInput = tokenBudgetInput
-        state.lastMissionTokenBudgetOutput = tokenBudgetOutput
-        state.lastMissionThinkingEnabled = thinkingEnabled
-        state.lastMissionThinkingBudget = thinkingBudget
-        workspace.projectUIState = state
-        try? workspace.store.save(state)
+        LumaAppState.shared.missionDefaults = .init(
+            providerID: selectedProviderID,
+            modelID: selectedModelID,
+            tokenBudgetInput: tokenBudgetInput,
+            tokenBudgetOutput: tokenBudgetOutput,
+            thinkingEnabled: thinkingEnabled,
+            thinkingBudget: thinkingBudget,
+            reasoningEffort: reasoningEffortOptions.isEmpty ? nil : reasoningEffort
+        )
+        if currentProviderSupportsCustomBaseURL {
+            LumaAppState.shared.setProviderBaseURL(baseURLInput, providerID: selectedProviderID)
+        }
     }
 }
-
