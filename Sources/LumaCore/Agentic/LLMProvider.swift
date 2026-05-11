@@ -7,6 +7,8 @@ public struct LLMProviderCapabilities: Sendable, Hashable {
     public var supportsToolUse: Bool
     public var requiresAPIKey: Bool
     public var supportsCustomBaseURL: Bool
+    public var reasoningEffortOptions: [String]
+    public var defaultReasoningEffort: String?
 
     public init(
         supportsStreaming: Bool,
@@ -14,7 +16,9 @@ public struct LLMProviderCapabilities: Sendable, Hashable {
         supportsThinking: Bool,
         supportsToolUse: Bool,
         requiresAPIKey: Bool,
-        supportsCustomBaseURL: Bool
+        supportsCustomBaseURL: Bool,
+        reasoningEffortOptions: [String] = [],
+        defaultReasoningEffort: String? = nil
     ) {
         self.supportsStreaming = supportsStreaming
         self.supportsPromptCaching = supportsPromptCaching
@@ -22,6 +26,8 @@ public struct LLMProviderCapabilities: Sendable, Hashable {
         self.supportsToolUse = supportsToolUse
         self.requiresAPIKey = requiresAPIKey
         self.supportsCustomBaseURL = supportsCustomBaseURL
+        self.reasoningEffortOptions = reasoningEffortOptions
+        self.defaultReasoningEffort = defaultReasoningEffort
     }
 }
 
@@ -59,7 +65,7 @@ public protocol LLMProvider: Sendable {
         baseURL: URL?
     ) -> AsyncThrowingStream<LLMTurnEvent, Error>
 
-    func suggestedModels() -> [LLMModelInfo]
+    func suggestedModels(apiKey: String?, baseURL: URL?) async throws -> [LLMModelInfo]
 }
 
 @MainActor

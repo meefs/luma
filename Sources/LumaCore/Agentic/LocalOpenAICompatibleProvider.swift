@@ -23,19 +23,18 @@ public struct LocalOpenAICompatibleProvider: LLMProvider {
                 requiresAPIKey: false,
                 supportsCustomBaseURL: true
             ),
-            defaultModelID: "gpt-oss:20b",
-            summarizationModelID: "llama3.2:3b",
+            defaultModelID: nil,
+            summarizationModelID: nil,
             defaultBaseURL: baseURL
         )
     }
 
-    public func suggestedModels() -> [LLMModelInfo] {
-        [
-            LLMModelInfo(id: "gpt-oss:20b", displayName: "gpt-oss 20B", contextWindow: 128_000, maxOutput: 16_384, supportsCaching: false, supportsThinking: false),
-            LLMModelInfo(id: "qwen2.5-coder:14b", displayName: "Qwen 2.5 Coder 14B", contextWindow: 128_000, maxOutput: 16_384, supportsCaching: false, supportsThinking: false),
-            LLMModelInfo(id: "llama3.2:3b", displayName: "Llama 3.2 3B", contextWindow: 128_000, maxOutput: 8_192, supportsCaching: false, supportsThinking: false),
-            LLMModelInfo(id: "mannix/jan-nano", displayName: "Jan Nano", contextWindow: 32_768, maxOutput: 8_192, supportsCaching: false, supportsThinking: false),
-        ]
+    public func suggestedModels(apiKey: String?, baseURL: URL?) async throws -> [LLMModelInfo] {
+        try await fetchOpenAICompatibleModels(
+            session: session,
+            baseURL: baseURL ?? descriptor.defaultBaseURL,
+            apiKey: apiKey
+        )
     }
 
     public func streamTurn(

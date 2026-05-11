@@ -231,6 +231,7 @@ public final class MissionExecutor {
             tools: tools,
             maxOutputTokens: min(maxOut, 16_384),
             thinkingBudget: mission.thinkingBudget,
+            reasoningEffort: mission.reasoningEffort,
             temperature: mission.temperature,
             mission: mission
         )
@@ -270,7 +271,8 @@ public final class MissionExecutor {
         var stopReason = LLMStopReason.endTurn
         var capturedError: Error?
 
-        let stream = provider.streamTurn(request, apiKey: apiKey, baseURL: nil)
+        let baseURL = LumaAppState.shared.providerBaseURL(providerID: provider.descriptor.id).flatMap(URL.init(string:))
+        let stream = provider.streamTurn(request, apiKey: apiKey, baseURL: baseURL)
         do {
             for try await event in stream {
                 liveDeltaSink?(missionID, event)
@@ -455,6 +457,7 @@ public final class MissionExecutor {
             m.cacheReadTokens = mission.cacheReadTokens
             m.cacheCreateTokens = mission.cacheCreateTokens
             m.thinkingBudget = mission.thinkingBudget
+            m.reasoningEffort = mission.reasoningEffort
         }
         if let saved {
             collaboration?.enqueueMissionUpsert(saved)

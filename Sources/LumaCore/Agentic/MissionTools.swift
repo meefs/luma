@@ -2781,7 +2781,8 @@ public enum MissionTools {
 
         var explanation = ""
         do {
-            for try await event in provider.streamTurn(request, apiKey: apiKey, baseURL: nil) {
+            let baseURL = LumaAppState.shared.providerBaseURL(providerID: providerID).flatMap(URL.init(string:))
+            for try await event in provider.streamTurn(request, apiKey: apiKey, baseURL: baseURL) {
                 if case .finalMessage(_, let blocks) = event {
                     for block in blocks {
                         if case .text(let t) = block.content {

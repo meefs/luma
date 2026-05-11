@@ -3689,6 +3689,7 @@ public final class Engine {
         tokenBudgetInput: Int,
         tokenBudgetOutput: Int,
         thinkingBudget: Int = 0,
+        reasoningEffort: String? = nil,
         temperature: Double? = nil
     ) -> Mission? {
         var mission = Mission(
@@ -3698,6 +3699,7 @@ public final class Engine {
             tokenBudgetInput: tokenBudgetInput,
             tokenBudgetOutput: tokenBudgetOutput,
             thinkingBudget: thinkingBudget,
+            reasoningEffort: reasoningEffort,
             temperature: temperature
         )
         do {

@@ -1117,6 +1117,7 @@ public final class ProjectStore: Sendable {
             t.column("cache_read_tokens", .integer).notNull().defaults(to: 0)
             t.column("cache_create_tokens", .integer).notNull().defaults(to: 0)
             t.column("thinking_budget", .integer).notNull().defaults(to: 0)
+            t.column("reasoning_effort", .text)
             t.column("temperature", .double)
         }
 

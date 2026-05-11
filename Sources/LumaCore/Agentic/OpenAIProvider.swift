@@ -21,20 +21,20 @@ public struct OpenAIProvider: LLMProvider {
                 supportsThinking: true,
                 supportsToolUse: true,
                 requiresAPIKey: true,
-                supportsCustomBaseURL: true
+                supportsCustomBaseURL: false
             ),
-            defaultModelID: "gpt-5",
-            summarizationModelID: "gpt-5-mini",
+            defaultModelID: nil,
+            summarizationModelID: nil,
             defaultBaseURL: baseURL
         )
     }
 
-    public func suggestedModels() -> [LLMModelInfo] {
-        [
-            LLMModelInfo(id: "gpt-5", displayName: "GPT-5", contextWindow: 200_000, maxOutput: 32_000, supportsCaching: false, supportsThinking: true),
-            LLMModelInfo(id: "gpt-5-mini", displayName: "GPT-5 mini", contextWindow: 128_000, maxOutput: 16_384, supportsCaching: false, supportsThinking: false),
-            LLMModelInfo(id: "o3", displayName: "o3", contextWindow: 200_000, maxOutput: 100_000, supportsCaching: false, supportsThinking: true),
-        ]
+    public func suggestedModels(apiKey: String?, baseURL: URL?) async throws -> [LLMModelInfo] {
+        try await fetchOpenAICompatibleModels(
+            session: session,
+            baseURL: baseURL ?? descriptor.defaultBaseURL,
+            apiKey: apiKey
+        )
     }
 
     public func streamTurn(
@@ -50,6 +50,46 @@ public struct OpenAIProvider: LLMProvider {
             requiresAPIKey: descriptor.capabilities.requiresAPIKey
         )
     }
+}
+
+func fetchOpenAICompatibleModels(
+    session: URLSession,
+    baseURL: URL,
+    apiKey: String?
+) async throws -> [LLMModelInfo] {
+    var url = baseURL
+    url.append(path: "/v1/models")
+
+    var request = URLRequest(url: url)
+    request.setValue("application/json", forHTTPHeaderField: "accept")
+    if let apiKey, !apiKey.isEmpty {
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "authorization")
+    }
+
+    let (data, response) = try await session.data(for: request)
+    if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+        let body = String(data: data, encoding: .utf8) ?? ""
+        throw LLMProviderError.requestFailed(status: http.statusCode, message: body)
+    }
+
+    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let entries = object["data"] as? [[String: Any]]
+    else {
+        throw LLMProviderError.requestFailed(status: 0, message: "Unexpected response from \(url.absoluteString)")
+    }
+
+    return entries.compactMap { entry -> LLMModelInfo? in
+        guard let id = entry["id"] as? String else { return nil }
+        return LLMModelInfo(
+            id: id,
+            displayName: id,
+            contextWindow: 128_000,
+            maxOutput: 16_384,
+            supportsCaching: false,
+            supportsThinking: false
+        )
+    }
+    .sorted { $0.id < $1.id }
 }
 
 func runOpenAICompatibleStream(

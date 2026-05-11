@@ -26,7 +26,9 @@ public final class ClaudeCodeProvider: LLMProvider {
                 supportsThinking: false,
                 supportsToolUse: engine != nil,
                 requiresAPIKey: false,
-                supportsCustomBaseURL: false
+                supportsCustomBaseURL: false,
+                reasoningEffortOptions: ["auto", "low", "medium", "high", "xhigh", "max"],
+                defaultReasoningEffort: "auto"
             ),
             defaultModelID: "default",
             summarizationModelID: "haiku",
@@ -34,7 +36,7 @@ public final class ClaudeCodeProvider: LLMProvider {
         )
     }
 
-    nonisolated public func suggestedModels() -> [LLMModelInfo] {
+    nonisolated public func suggestedModels(apiKey: String?, baseURL: URL?) async throws -> [LLMModelInfo] {
         [
             LLMModelInfo(id: "default", displayName: "Default (Claude Code's choice)", contextWindow: 200_000, maxOutput: 8_192, supportsCaching: false, supportsThinking: false),
             LLMModelInfo(id: "sonnet", displayName: "Sonnet", contextWindow: 200_000, maxOutput: 16_384, supportsCaching: false, supportsThinking: false),
@@ -91,6 +93,9 @@ public final class ClaudeCodeProvider: LLMProvider {
         }
         if request.modelID != "default", !request.modelID.isEmpty {
             arguments.append(contentsOf: ["--model", request.modelID])
+        }
+        if let effort = request.reasoningEffort, effort != "auto", !effort.isEmpty {
+            arguments.append(contentsOf: ["--effort", effort])
         }
 
         #if canImport(Network) || canImport(CSoup)

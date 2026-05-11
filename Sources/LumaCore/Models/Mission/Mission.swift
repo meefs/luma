@@ -21,6 +21,7 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
     public var cacheReadTokens: Int
     public var cacheCreateTokens: Int
     public var thinkingBudget: Int
+    public var reasoningEffort: String?
     public var temperature: Double?
 
     enum CodingKeys: String, CodingKey {
@@ -41,6 +42,7 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
         case cacheReadTokens = "cache_read_tokens"
         case cacheCreateTokens = "cache_create_tokens"
         case thinkingBudget = "thinking_budget"
+        case reasoningEffort = "reasoning_effort"
         case temperature
     }
 
@@ -52,6 +54,7 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
         tokenBudgetInput: Int,
         tokenBudgetOutput: Int,
         thinkingBudget: Int = 0,
+        reasoningEffort: String? = nil,
         temperature: Double? = nil
     ) {
         let now = Date()
@@ -72,6 +75,7 @@ public struct Mission: Codable, Identifiable, Sendable, FetchableRecord, Persist
         self.cacheReadTokens = 0
         self.cacheCreateTokens = 0
         self.thinkingBudget = thinkingBudget
+        self.reasoningEffort = reasoningEffort
         self.temperature = temperature
     }
 }
