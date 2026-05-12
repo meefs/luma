@@ -25,6 +25,7 @@ final class SessionDetailView {
 
     private let summaryPane: Box
     private let summaryBox: Box
+    private var summaryKeyGroup: SizeGroup
 
     private let modulesPane: Paned
     private let modulesList: ListBox
@@ -97,6 +98,7 @@ final class SessionDetailView {
 
         summaryBox = Box(orientation: .vertical, spacing: 4)
         summaryBox.halign = .start
+        summaryKeyGroup = SizeGroup(mode: .horizontal)
 
         let summaryScroll = ScrolledWindow()
         summaryScroll.hexpand = true
@@ -224,9 +226,12 @@ final class SessionDetailView {
         rebuildSummary(session: session)
         applyBanner(for: session)
 
-        let nodeAvailable = engine?.node(forSessionID: sessionID) != nil
-        if nodeAvailable != lastNodeAvailable {
+        let node = engine?.node(forSessionID: sessionID)
+        if (node != nil) != lastNodeAvailable {
             observeNode()
+        } else if let node {
+            renderModules(node.modules)
+            renderThreads(currentThreads(of: node))
         }
     }
 
@@ -299,6 +304,7 @@ final class SessionDetailView {
 
     private func rebuildSummary(session: LumaCore.ProcessSession) {
         clearBox(summaryBox)
+        summaryKeyGroup = SizeGroup(mode: .horizontal)
 
         let node = engine?.node(forSessionID: sessionID)
 
@@ -345,8 +351,9 @@ final class SessionDetailView {
 
         let key = Label(str: label)
         key.halign = .start
-        key.setSizeRequest(width: 140, height: -1)
+        key.xalign = 0
         key.add(cssClass: "dim-label")
+        summaryKeyGroup.add(widget: key)
 
         let val = Label(str: value)
         val.halign = .start
