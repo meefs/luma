@@ -1006,7 +1006,8 @@ final class EventStreamPane {
         case .script: title = "Script Runtime (\(process))"
         case .console: title = "Console (\(process))"
         case .repl: title = "REPL (\(process))"
-        case .instrument(_, let name): title = "Instrument \(name)"
+        case .instrument(_, let name):
+            title = engine.instrument(forEvent: event).map { engine.descriptor(for: $0).displayName } ?? name
         case .spawnGating(_, _, _, _, let outcome):
             title = outcome == .captured ? "Spawn Captured" : "Spawn Released"
         }

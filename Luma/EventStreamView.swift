@@ -450,11 +450,16 @@ struct EventStreamView: View {
 
     private func pin(_ evt: RuntimeEvent) {
         let (processName, title) = prettyContext(evt)
+        let jsValue: JSInspectValue? = {
+            if case .jsValue(let v) = evt.payload { return v }
+            return nil
+        }()
 
         engine.addNotebookEntry(
             LumaCore.NotebookEntry(
                 title: title,
                 details: prettyPayload(evt),
+                jsValue: jsValue,
                 binaryData: evt.data.map { Data($0) },
                 sessionID: evt.sessionID ?? UUID(),
                 processName: processName
@@ -488,7 +493,8 @@ struct EventStreamView: View {
             return (processName, "REPL (\(processName))")
 
         case .instrument(_, let name):
-            return (processName, "Instrument \(name)")
+            let displayName = engine.instrument(forEvent: evt).map { engine.descriptor(for: $0).displayName } ?? name
+            return (processName, displayName)
 
         case .spawnGating(_, let deviceName, _, _, let outcome):
             let title: String
