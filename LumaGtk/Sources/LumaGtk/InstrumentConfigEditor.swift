@@ -116,34 +116,24 @@ final class InstrumentConfigEditor {
         let fid = feature.id
 
         if feature.optional {
-            let header = Box(orientation: .horizontal, spacing: 8)
-            header.hexpand = true
-            let toggle = Switch()
-            toggle.active = initialEnabled
-            toggle.valign = .center
-            header.append(child: toggle)
-            let nameLabel = Label(str: feature.name)
-            nameLabel.halign = .start
-            nameLabel.hexpand = true
-            header.append(child: nameLabel)
-            row.append(child: header)
-
-            toggle.onStateSet { [weak self] _, state in
+            let check = CheckButton(label: feature.name)
+            check.active = initialEnabled
+            check.onToggled { [weak self] ref in
                 MainActor.assumeIsolated {
-                    self?.mutateCustom { cfg in
+                    guard let self else { return }
+                    let enabled = ref.active
+                    self.mutateCustom { cfg in
                         let existingValue = cfg.features[fid]?.value ?? feature.schema.defaultValue
-                        cfg.features[fid] = FeatureState(enabled: state, value: existingValue)
+                        cfg.features[fid] = FeatureState(enabled: enabled, value: existingValue)
                     }
-                    return false
                 }
             }
+            row.append(child: check)
 
             if case .boolean = feature.schema {
                 return row
             }
-        } else if case .boolean = feature.schema {
-            let header = Box(orientation: .horizontal, spacing: 8)
-            header.hexpand = true
+
             let editor = FeatureValueEditor(schema: feature.schema, value: initialValue) { [weak self] newValue in
                 self?.mutateCustom { cfg in
                     let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
@@ -151,19 +141,31 @@ final class InstrumentConfigEditor {
                 }
             }
             customFeatureEditors.append(editor)
-            header.append(child: editor.widget)
-            let nameLabel = Label(str: feature.name)
-            nameLabel.halign = .start
-            nameLabel.hexpand = true
-            header.append(child: nameLabel)
-            row.append(child: header)
+            editor.widget.marginStart = 24
+            row.append(child: editor.widget)
             return row
-        } else {
-            let nameLabel = Label(str: feature.name)
-            nameLabel.halign = .start
-            row.append(child: nameLabel)
         }
 
+        if case .boolean = feature.schema {
+            let check = CheckButton(label: feature.name)
+            if case .boolean(let b) = initialValue { check.active = b }
+            check.onToggled { [weak self] ref in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let newValue: FeatureValue = .boolean(ref.active)
+                    self.mutateCustom { cfg in
+                        let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
+                        cfg.features[fid] = FeatureState(enabled: existingEnabled, value: newValue)
+                    }
+                }
+            }
+            row.append(child: check)
+            return row
+        }
+
+        let nameLabel = Label(str: feature.name)
+        nameLabel.halign = .start
+        row.append(child: nameLabel)
         let editor = FeatureValueEditor(schema: feature.schema, value: initialValue) { [weak self] newValue in
             self?.mutateCustom { cfg in
                 let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
@@ -171,7 +173,6 @@ final class InstrumentConfigEditor {
             }
         }
         customFeatureEditors.append(editor)
-        editor.widget.marginStart = feature.optional ? 28 : 0
         row.append(child: editor.widget)
         return row
     }
@@ -290,34 +291,24 @@ final class InstrumentConfigEditor {
         let fid = feature.id
 
         if feature.optional {
-            let header = Box(orientation: .horizontal, spacing: 8)
-            header.hexpand = true
-            let toggle = Switch()
-            toggle.active = initialEnabled
-            toggle.valign = .center
-            header.append(child: toggle)
-            let nameLabel = Label(str: feature.name)
-            nameLabel.halign = .start
-            nameLabel.hexpand = true
-            header.append(child: nameLabel)
-            row.append(child: header)
-
-            toggle.onStateSet { [weak self] _, state in
+            let check = CheckButton(label: feature.name)
+            check.active = initialEnabled
+            check.onToggled { [weak self] ref in
                 MainActor.assumeIsolated {
-                    self?.mutateHookPack { cfg in
+                    guard let self else { return }
+                    let enabled = ref.active
+                    self.mutateHookPack { cfg in
                         let existingValue = cfg.features[fid]?.value ?? feature.schema.defaultValue
-                        cfg.features[fid] = FeatureState(enabled: state, value: existingValue)
+                        cfg.features[fid] = FeatureState(enabled: enabled, value: existingValue)
                     }
-                    return false
                 }
             }
+            row.append(child: check)
 
             if case .boolean = feature.schema {
                 return row
             }
-        } else if case .boolean = feature.schema {
-            let header = Box(orientation: .horizontal, spacing: 8)
-            header.hexpand = true
+
             let editor = FeatureValueEditor(schema: feature.schema, value: initialValue) { [weak self] newValue in
                 self?.mutateHookPack { cfg in
                     let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
@@ -325,19 +316,31 @@ final class InstrumentConfigEditor {
                 }
             }
             hookPackFeatureEditors.append(editor)
-            header.append(child: editor.widget)
-            let nameLabel = Label(str: feature.name)
-            nameLabel.halign = .start
-            nameLabel.hexpand = true
-            header.append(child: nameLabel)
-            row.append(child: header)
+            editor.widget.marginStart = 24
+            row.append(child: editor.widget)
             return row
-        } else {
-            let nameLabel = Label(str: feature.name)
-            nameLabel.halign = .start
-            row.append(child: nameLabel)
         }
 
+        if case .boolean = feature.schema {
+            let check = CheckButton(label: feature.name)
+            if case .boolean(let b) = initialValue { check.active = b }
+            check.onToggled { [weak self] ref in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let newValue: FeatureValue = .boolean(ref.active)
+                    self.mutateHookPack { cfg in
+                        let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
+                        cfg.features[fid] = FeatureState(enabled: existingEnabled, value: newValue)
+                    }
+                }
+            }
+            row.append(child: check)
+            return row
+        }
+
+        let nameLabel = Label(str: feature.name)
+        nameLabel.halign = .start
+        row.append(child: nameLabel)
         let editor = FeatureValueEditor(schema: feature.schema, value: initialValue) { [weak self] newValue in
             self?.mutateHookPack { cfg in
                 let existingEnabled = cfg.features[fid]?.enabled ?? feature.enabledByDefault
@@ -345,7 +348,6 @@ final class InstrumentConfigEditor {
             }
         }
         hookPackFeatureEditors.append(editor)
-        editor.widget.marginStart = feature.optional ? 28 : 0
         row.append(child: editor.widget)
         return row
     }
