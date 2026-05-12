@@ -90,7 +90,7 @@ final class CustomInstrumentCompatibilityDialog {
         grid.columnSpacing = 12
         grid.rowSpacing = 4
 
-        let columns = 3
+        let columns = 4
         for (index, value) in orderedValues(known: known, axis: axis).enumerated() {
             let check = CheckButton(label: displayName(value))
             check.active = selection(for: axis).contains(value)
