@@ -3150,6 +3150,10 @@ public final class Engine {
                     } catch {
                         print("[Engine] Failed to dispose custom instance \(liveInstance.id): \(error)")
                     }
+                    node.markInstrumentDetached(id: liveInstance.id)
+                }
+                if await skipIfIncompatible(instanceID: liveInstance.id, compatibility: def.compatibility, on: node) {
+                    continue
                 }
                 do {
                     try await loadCustomInstrument(
