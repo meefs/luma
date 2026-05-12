@@ -1325,7 +1325,7 @@ public enum MissionTools {
             name: "create_custom_instrument",
             description: "Create a custom instrument definition. The definition lives in the project and can be attached to any number of sessions via attach_custom_instrument. 'source' is the full TypeScript module. Optional 'icon' is one of the catalog ids (e.g. wand-stars, bug, scope, network). Optional 'features' declares boolean toggles surfaced on config.features in the source. Optional 'widgets' declares live UI elements: graphs you push points to via ctx.widget(id).push({series,x,y}), or lists you maintain via upsertItem/removeItem with per-item action buttons routed back to the source's onAction handler.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"name":{"type":"string"},"icon":{"type":"string","description":"Catalog id like wand-stars, bug, scope, network — see list_custom_instrument_icons"},"source":{"type":"string"},"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["name","source"],"additionalProperties":false}
+                {"type":"object","properties":{"name":{"type":"string"},"icon":{"type":"string","description":"Catalog id like wand-stars, bug, scope, network — see list_custom_instrument_icons"},"compatibility":\(compatibilitySchemaJSON),"source":{"type":"string"},"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["name","source"],"additionalProperties":false}
                 """,
             isObserve: false,
             requiresSession: false
@@ -1339,10 +1339,12 @@ public enum MissionTools {
                 return errorResult("missing source", code: .invalidInput)
             }
             let icon = parseIconArg(invocation.args["icon"] as? String)
+            let compatibility = parseCompatibilityArg(invocation.args["compatibility"])
             let features = parseFeaturesArg(invocation.args["features"])
             let widgets = parseWidgetsArg(invocation.args["widgets"])
             var def = engine.createCustomInstrument(name: name, icon: icon, source: source)
-            if !features.isEmpty || !widgets.isEmpty {
+            if !compatibility.isUniversal || !features.isEmpty || !widgets.isEmpty {
+                def.compatibility = compatibility
                 def.features = features
                 def.widgets = widgets
                 await engine.updateCustomInstrument(def)
@@ -1356,7 +1358,7 @@ public enum MissionTools {
             name: "update_custom_instrument",
             description: "Update a custom instrument's name, icon, source, features, or widgets. Only fields you pass change. Passing 'features' or 'widgets' replaces the entire list — pass an empty array to clear.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"def_id":{"type":"string"},"name":{"type":"string"},"icon":{"type":"string"},"source":{"type":"string"},"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["def_id"],"additionalProperties":false}
+                {"type":"object","properties":{"def_id":{"type":"string"},"name":{"type":"string"},"icon":{"type":"string"},"compatibility":\(compatibilitySchemaJSON),"source":{"type":"string"},"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["def_id"],"additionalProperties":false}
                 """,
             isObserve: false,
             requiresSession: false
@@ -1374,6 +1376,9 @@ public enum MissionTools {
             }
             if let iconID = invocation.args["icon"] as? String {
                 def.icon = parseIconArg(iconID)
+            }
+            if invocation.args["compatibility"] != nil {
+                def.compatibility = parseCompatibilityArg(invocation.args["compatibility"])
             }
             if let source = invocation.args["source"] as? String, !source.isEmpty {
                 def.source = source
@@ -1985,6 +1990,18 @@ public enum MissionTools {
             return .symbolic(InstrumentIconCatalog.default.id)
         }
         return .symbolic(InstrumentIconCatalog.concept(forID: raw).id)
+    }
+
+    private static let compatibilitySchemaJSON: String = """
+        {"type":"object","description":"Optional platform/OS/arch gate. Omit a field to leave that axis unconstrained; pass an empty object to clear all constraints.","properties":{"platforms":{"type":"array","items":{"type":"string","enum":["windows","darwin","linux","freebsd","qnx","barebone"]}},"osIDs":{"type":"array","items":{"type":"string","enum":["windows","macos","linux","ios","watchos","tvos","visionos","android","freebsd","qnx"]}},"archs":{"type":"array","items":{"type":"string","enum":["ia32","x64","arm","arm64","mips"]}}},"additionalProperties":false}
+        """
+
+    private static func parseCompatibilityArg(_ raw: Any?) -> InstrumentCompatibility {
+        guard let obj = raw as? [String: Any] else { return .universal }
+        let platforms = (obj["platforms"] as? [String]).map(Set.init)
+        let osIDs = (obj["osIDs"] as? [String]).map(Set.init)
+        let archs = (obj["archs"] as? [String]).map(Set.init)
+        return InstrumentCompatibility(platforms: platforms, osIDs: osIDs, archs: archs)
     }
 
     private static func parseFeaturesArg(_ raw: Any?) -> [CustomInstrumentDef.Feature] {
