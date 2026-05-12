@@ -32,7 +32,7 @@ public struct HookPackManifest: Codable, Sendable, Equatable {
     public var name: String
     public var icon: Icon?
     public var compatibility: InstrumentCompatibility
-    public var entry: String
+    public var entrypoint: String
     public var features: [CustomInstrumentDef.Feature]
     public var widgets: [InstrumentWidget]
 
@@ -40,20 +40,20 @@ public struct HookPackManifest: Codable, Sendable, Equatable {
         name: String,
         icon: Icon?,
         compatibility: InstrumentCompatibility = .universal,
-        entry: String,
+        entrypoint: String,
         features: [CustomInstrumentDef.Feature],
         widgets: [InstrumentWidget]
     ) {
         self.name = name
         self.icon = icon
         self.compatibility = compatibility
-        self.entry = entry
+        self.entrypoint = entrypoint
         self.features = features
         self.widgets = widgets
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, icon, compatibility, entry, features, widgets
+        case name, icon, compatibility, entrypoint, features, widgets
     }
 
     public init(from decoder: Decoder) throws {
@@ -61,7 +61,7 @@ public struct HookPackManifest: Codable, Sendable, Equatable {
         name = try c.decode(String.self, forKey: .name)
         icon = try c.decodeIfPresent(Icon.self, forKey: .icon)
         compatibility = try c.decodeIfPresent(InstrumentCompatibility.self, forKey: .compatibility) ?? .universal
-        entry = try c.decode(String.self, forKey: .entry)
+        entrypoint = try c.decode(String.self, forKey: .entrypoint)
         features = try c.decodeIfPresent([CustomInstrumentDef.Feature].self, forKey: .features) ?? []
         widgets = try c.decodeIfPresent([InstrumentWidget].self, forKey: .widgets) ?? []
     }
@@ -73,7 +73,7 @@ public struct HookPackManifest: Codable, Sendable, Equatable {
         if !compatibility.isUniversal {
             try c.encode(compatibility, forKey: .compatibility)
         }
-        try c.encode(entry, forKey: .entry)
+        try c.encode(entrypoint, forKey: .entrypoint)
         try c.encode(features, forKey: .features)
         try c.encode(widgets, forKey: .widgets)
     }

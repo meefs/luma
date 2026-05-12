@@ -55,7 +55,11 @@ struct CustomInstrumentConfigView: View {
             }
             Spacer()
             Button("Edit Source\u{2026}") {
-                selection = .customInstrumentDef(defID)
+                if let entrypoint = def?.entrypoint {
+                    selection = .customInstrumentFile(defID, entrypoint)
+                } else {
+                    selection = .customInstrumentDef(defID)
+                }
             }
             .accessibilityIdentifier("customInstrument.editSource")
         }

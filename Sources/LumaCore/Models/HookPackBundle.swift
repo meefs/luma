@@ -1,6 +1,16 @@
 import Foundation
 
 public struct HookPackBundle: Sendable {
+    public struct File: Sendable {
+        public let path: String
+        public let content: Data
+
+        public init(path: String, content: Data) {
+            self.path = path
+            self.content = content
+        }
+    }
+
     public struct IconAttachment: Sendable {
         public let filename: String
         public let data: Data
@@ -12,19 +22,16 @@ public struct HookPackBundle: Sendable {
     }
 
     public let manifestData: Data
-    public let entryFilename: String
-    public let entrySource: String
+    public let files: [File]
     public let icon: IconAttachment?
 
     public init(
         manifestData: Data,
-        entryFilename: String,
-        entrySource: String,
+        files: [File],
         icon: IconAttachment?
     ) {
         self.manifestData = manifestData
-        self.entryFilename = entryFilename
-        self.entrySource = entrySource
+        self.files = files
         self.icon = icon
     }
 }

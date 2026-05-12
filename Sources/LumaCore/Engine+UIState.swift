@@ -37,6 +37,22 @@ extension Engine {
         }
     }
 
+    public func setSidebarExpansion(sessionID: UUID, _ expansion: SidebarExpansion) {
+        mutateSessionUIState(sessionID: sessionID) { $0.sidebarExpansion = expansion }
+    }
+
+    public func setSidebarExpansion(customInstrumentDefID: UUID, _ expansion: SidebarExpansion) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var state = self.customInstrumentDefUIStates[customInstrumentDefID]
+                ?? CustomInstrumentDefUIState(defID: customInstrumentDefID)
+            guard state.sidebarExpansion != expansion else { return }
+            state.sidebarExpansion = expansion
+            self.customInstrumentDefUIStates[customInstrumentDefID] = state
+            try? self.store.save(state)
+        }
+    }
+
     public func setSessionDetailSection(sessionID: UUID, section: String?) {
         mutateSessionUIState(sessionID: sessionID) { $0.detailSection = section }
     }
@@ -58,6 +74,14 @@ extension Engine {
             self.sessionUIStates[sessionID] = state
             try? self.store.save(state)
         }
+    }
+
+    public func sidebarExpansion(forSessionID sessionID: UUID) -> SidebarExpansion {
+        sessionUIStates[sessionID]?.sidebarExpansion ?? .expanded
+    }
+
+    public func sidebarExpansion(forCustomInstrumentDefID defID: UUID) -> SidebarExpansion {
+        customInstrumentDefUIStates[defID]?.sidebarExpansion ?? .expanded
     }
 
     public func sessionDetailSectionRaw(forSessionID sessionID: UUID) -> String? {

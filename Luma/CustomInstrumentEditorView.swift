@@ -4,9 +4,11 @@ import SwiftyMonaco
 
 struct CustomInstrumentEditorView: View {
     let defID: UUID
+    let path: String?
     let engine: Engine
 
-    @State private var draftSource: String = ""
+    @State private var isEditorFocused: Bool = false
+    @State private var draftContent: String = ""
     @State private var isDirty = false
     @State private var showSavedCheck = false
 
@@ -14,50 +16,77 @@ struct CustomInstrumentEditorView: View {
         engine.customInstruments.def(withId: defID)
     }
 
+    private var resolvedPath: String? {
+        if let path { return path }
+        return def?.entrypoint
+    }
+
+    private var file: CustomInstrumentFile? {
+        guard let resolvedPath else { return nil }
+        return engine.customInstruments.file(defID: defID, path: resolvedPath)
+    }
+
     var body: some View {
         Group {
-            if let def {
-                content(def: def)
+            if let def, let file {
+                content(def: def, file: file)
+            } else if def == nil {
+                missingMessage("Custom instrument not found.")
             } else {
-                Text("Custom instrument not found.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                missingMessage("File not found.")
             }
         }
     }
 
     @ViewBuilder
-    private func content(def: CustomInstrumentDef) -> some View {
+    private func content(def: CustomInstrumentDef, file: CustomInstrumentFile) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            header(def: def)
+            header(def: def, file: file)
                 .padding(.horizontal, 16)
             CodeEditorView(
-                text: $draftSource,
+                text: $draftContent,
                 profile: EditorProfile.fridaCustomInstrument(
                     packages: engine.installedPackages,
-                    def: def
+                    def: def,
+                    files: engine.customInstruments.files(forDefID: defID),
+                    activePath: CustomInstrumentFile.workspaceRelativePath(defID: defID, path: file.path)
                 ),
-                introspector: nil,
+                focused: $isEditorFocused,
                 engine: engine,
             )
             .accessibilityIdentifier("customInstrument.editor")
         }
         .padding(.top, 8)
-        .onAppear { syncFromDef(def) }
-        .onChange(of: defID) { _, _ in
-            if let d = self.def { syncFromDef(d) }
+        .onAppear {
+            syncFromFile(file)
+            isEditorFocused = true
         }
-        .onChange(of: draftSource) { _, _ in recomputeDirty() }
+        .onChange(of: file.path) { _, _ in
+            syncFromFile(file)
+            isEditorFocused = true
+        }
+        .onChange(of: file.content) { _, newValue in
+            if !isDirty { draftContent = newValue }
+        }
+        .onChange(of: draftContent) { _, _ in recomputeDirty() }
+        .onDisappear { flushDraftIfNeeded() }
     }
 
-    private func header(def: CustomInstrumentDef) -> some View {
+    private func header(def: CustomInstrumentDef, file: CustomInstrumentFile) -> some View {
         HStack(spacing: 8) {
             InstrumentIconView(icon: def.icon, pointSize: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(def.name).font(.headline)
-                Text("Custom instrument")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(file.path).font(.caption).foregroundStyle(.secondary)
+                    if file.path == def.entrypoint {
+                        Text("entrypoint")
+                            .font(.caption2)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                    }
+                }
             }
             Spacer()
             saveStatusIcon
@@ -82,10 +111,11 @@ struct CustomInstrumentEditorView: View {
     }
 
     private func saveDraft() {
-        guard var d = def else { return }
-        d.source = draftSource
+        guard let file else { return }
+        let pathToSave = file.path
+        let content = draftContent
         Task { @MainActor in
-            await engine.updateCustomInstrument(d)
+            await engine.writeCustomInstrumentFile(defID: defID, path: pathToSave, content: content)
             isDirty = false
             showSavedCheck = true
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -93,14 +123,29 @@ struct CustomInstrumentEditorView: View {
         }
     }
 
-    private func syncFromDef(_ def: CustomInstrumentDef) {
-        draftSource = def.source
+    private func flushDraftIfNeeded() {
+        guard isDirty, let file else { return }
+        let pathToSave = file.path
+        let content = draftContent
+        Task { @MainActor in
+            await engine.writeCustomInstrumentFile(defID: defID, path: pathToSave, content: content)
+        }
+    }
+
+    private func syncFromFile(_ file: CustomInstrumentFile) {
+        draftContent = file.content
         isDirty = false
     }
 
     private func recomputeDirty() {
-        guard let def else { return }
-        isDirty = draftSource != def.source
+        guard let file else { return }
+        isDirty = draftContent != file.content
+    }
+
+    private func missingMessage(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 

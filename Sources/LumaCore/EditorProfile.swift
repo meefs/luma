@@ -94,10 +94,27 @@ public struct EditorExtraLib: Sendable, Equatable, Codable {
     }
 }
 
+/// A workspace-relative source file registered as a Monaco model so the
+/// editor's TypeScript service can resolve cross-file imports without
+/// requiring the file to live in the FS snapshot.
+public struct EditorProjectFile: Sendable, Equatable, Hashable, Codable {
+    public var path: String
+    public var text: String
+    public var languageId: String?
+
+    public init(path: String, text: String, languageId: String? = nil) {
+        self.path = path
+        self.text = text
+        self.languageId = languageId
+    }
+}
+
 /// Editor profile shared across UI frontends. Each frontend translates
 /// this into its concrete editor's configuration.
 public struct EditorProfile: Sendable, Equatable, Codable {
     public var languageId: String
+    public var projectFiles: [EditorProjectFile]
+    public var activePath: String?
     public var theme: EditorTheme
     public var fontSize: Int
     public var minimap: Bool
@@ -109,6 +126,8 @@ public struct EditorProfile: Sendable, Equatable, Codable {
 
     public init(
         languageId: String = "javascript",
+        projectFiles: [EditorProjectFile] = [],
+        activePath: String? = nil,
         theme: EditorTheme = .dark,
         fontSize: Int = 14,
         minimap: Bool = false,
@@ -119,6 +138,8 @@ public struct EditorProfile: Sendable, Equatable, Codable {
         jsExtraLibs: [EditorExtraLib] = []
     ) {
         self.languageId = languageId
+        self.projectFiles = projectFiles
+        self.activePath = activePath
         self.theme = theme
         self.fontSize = fontSize
         self.minimap = minimap
@@ -203,11 +224,20 @@ extension EditorProfile {
     public static func fridaCustomInstrument(
         packages: [InstalledPackage],
         def: CustomInstrumentDef? = nil,
+        files: [CustomInstrumentFile] = [],
+        activePath: String? = nil,
         theme: EditorTheme = .dark,
         fontSize: Int = 13
     ) -> EditorProfile {
         var profile = EditorProfile(
             languageId: "typescript",
+            projectFiles: files.map { file in
+                EditorProjectFile(
+                    path: CustomInstrumentFile.workspaceRelativePath(defID: file.defID, path: file.path),
+                    text: file.content
+                )
+            },
+            activePath: activePath,
             theme: theme,
             fontSize: fontSize,
             tsCompilerOptions: fridaCompilerOptions

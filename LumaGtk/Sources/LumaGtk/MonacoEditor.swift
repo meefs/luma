@@ -18,6 +18,7 @@ public final class MonacoEditor {
     private var pendingText: String
     private var pendingSnapshot: EditorFSSnapshot?
     private var isLoaded = false
+    private var wantsFocusOnLoad = false
 
     private static var instances: [ObjectIdentifier: MonacoEditor] = [:]
     private static var overlaySuspendCount: Int = 0
@@ -121,6 +122,15 @@ public final class MonacoEditor {
         }
     }
 
+    public func focus() {
+        guard isLoaded else {
+            wantsFocusOnLoad = true
+            return
+        }
+        luma_monaco_view_grab_focus(view)
+        evaluate("window.editor?.focus();")
+    }
+
     public func setText(_ text: String) {
         pendingText = text
         if isLoaded {
@@ -147,6 +157,11 @@ public final class MonacoEditor {
         evaluate(initialBootstrapScript())
         isReady = true
         onReady?()
+        if wantsFocusOnLoad {
+            wantsFocusOnLoad = false
+            luma_monaco_view_grab_focus(view)
+            evaluate("window.editor?.focus();")
+        }
     }
 
     fileprivate func handleTextChanged(_ base64: String) {
@@ -175,6 +190,9 @@ public final class MonacoEditor {
 
     private func initialBootstrapScript() -> String {
         var lines: [String] = []
+        lines.append("editor.setLanguageId('\(profile.languageId)');")
+        lines.append(projectFilesScript(profile.projectFiles))
+        lines.append(activePathScript(profile.activePath))
         lines.append("editor.updateDefaultTypescriptCompilerOptions(\(profile.tsCompilerOptions.toJavaScriptObjectLiteral()));")
         if !profile.tsExtraLibs.isEmpty {
             lines.append("editor.updateDefaultTypescriptExtraLibs([\(profile.tsExtraLibs.map { $0.toJavaScriptObjectLiteral() }.joined(separator: ", "))]);")
@@ -186,7 +204,6 @@ public final class MonacoEditor {
         if let snapScript = snapshotScript(pendingSnapshot) {
             lines.append(snapScript)
         }
-        lines.append("editor.setLanguageId('\(profile.languageId)');")
         lines.append(setTextScript(pendingText))
         let theme = profile.theme == .dark ? "vs-dark" : "vs"
         lines.append("""
@@ -204,14 +221,29 @@ public final class MonacoEditor {
 
     private func reconfigureScript(_ profile: EditorProfile) -> String {
         var lines: [String] = []
+        lines.append("editor.setLanguageId('\(profile.languageId)');")
+        lines.append(projectFilesScript(profile.projectFiles))
+        lines.append(activePathScript(profile.activePath))
         lines.append("editor.updateDefaultTypescriptCompilerOptions(\(profile.tsCompilerOptions.toJavaScriptObjectLiteral()));")
         lines.append("editor.updateDefaultTypescriptExtraLibs([\(profile.tsExtraLibs.map { $0.toJavaScriptObjectLiteral() }.joined(separator: ", "))]);")
         lines.append("editor.updateDefaultJavascriptCompilerOptions(\(profile.jsCompilerOptions.toJavaScriptObjectLiteral()));")
         lines.append("editor.updateDefaultJavascriptExtraLibs([\(profile.jsExtraLibs.map { $0.toJavaScriptObjectLiteral() }.joined(separator: ", "))]);")
-        lines.append("editor.setLanguageId('\(profile.languageId)');")
         let theme = profile.theme == .dark ? "vs-dark" : "vs"
         lines.append("editor.updateOptions({ theme: '\(theme)', fontSize: \(profile.fontSize), minimap: { enabled: \(profile.minimap) }, readOnly: \(profile.readOnly) });")
         return lines.joined(separator: "\n")
+    }
+
+    private func activePathScript(_ path: String?) -> String {
+        guard let path else { return "editor.setActivePath(null);" }
+        let escaped = path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        return "editor.setActivePath('\(escaped)');"
+    }
+
+    private func projectFilesScript(_ files: [EditorProjectFile]) -> String {
+        let payload = files.map { $0.toJavaScriptObjectLiteral() }.joined(separator: ", ")
+        return "editor.setProjectFiles([\(payload)]);"
     }
 }
 
@@ -269,6 +301,18 @@ extension EditorExtraLib {
     fileprivate func toJavaScriptObjectLiteral() -> String {
         let escapedPath = filePath.replacingOccurrences(of: "'", with: "\\'")
         return "{ content: \(javaScriptUTF8Decode(content)), filePath: '\(escapedPath)' }"
+    }
+}
+
+extension EditorProjectFile {
+    fileprivate func toJavaScriptObjectLiteral() -> String {
+        let escapedPath = path.replacingOccurrences(of: "'", with: "\\'")
+        var parts = ["path: '\(escapedPath)'", "text: \(javaScriptUTF8Decode(text))"]
+        if let languageId {
+            let escapedLang = languageId.replacingOccurrences(of: "'", with: "\\'")
+            parts.append("languageId: '\(escapedLang)'")
+        }
+        return "{ \(parts.joined(separator: ", ")) }"
     }
 }
 

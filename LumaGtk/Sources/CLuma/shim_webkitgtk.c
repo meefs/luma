@@ -78,6 +78,12 @@ luma_monaco_view_set_overlay_visible(LumaMonacoView *view, bool visible)
 }
 
 void
+luma_monaco_view_grab_focus(LumaMonacoView *view)
+{
+    gtk_widget_grab_focus(GTK_WIDGET(view->web_view));
+}
+
+void
 luma_monaco_view_evaluate(LumaMonacoView *view, const char *script_utf8)
 {
     webkit_web_view_evaluate_javascript(view->web_view,

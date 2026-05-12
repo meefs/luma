@@ -242,6 +242,16 @@ luma_monaco_view_set_overlay_visible(LumaMonacoView *view, bool visible)
 }
 
 void
+luma_monaco_view_grab_focus(LumaMonacoView *view)
+{
+    if (view->overlay_panel == nil) {
+        return;
+    }
+    [view->overlay_panel makeKeyWindow];
+    [view->overlay_panel makeFirstResponder:view->web_view];
+}
+
+void
 luma_monaco_view_evaluate(LumaMonacoView *view, const char *script_utf8)
 {
     NSString *script = [NSString stringWithUTF8String:script_utf8];

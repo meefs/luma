@@ -6,6 +6,7 @@ struct CodeEditorView: View {
     @Binding var text: String
     let profile: EditorProfile
     var introspector: MonacoIntrospector? = nil
+    var focused: Binding<Bool>? = nil
     let engine: Engine
 
     var body: some View {
@@ -17,6 +18,10 @@ struct CodeEditorView: View {
 
         if let introspector {
             editor = editor.introspector(introspector)
+        }
+
+        if let focused {
+            editor = editor.focused(focused)
         }
 
         return editor.task {

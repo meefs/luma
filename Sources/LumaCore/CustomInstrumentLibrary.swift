@@ -5,9 +5,11 @@ import Observation
 @MainActor
 public final class CustomInstrumentLibrary {
     public private(set) var defs: [CustomInstrumentDef] = []
+    public private(set) var filesByDef: [UUID: [CustomInstrumentFile]] = [:]
 
     @ObservationIgnored public var observers: [@MainActor () -> Void] = []
-    @ObservationIgnored private var observation: StoreObservation?
+    @ObservationIgnored private var defsObservation: StoreObservation?
+    @ObservationIgnored private var filesObservation: StoreObservation?
 
     public init() {}
 
@@ -16,30 +18,38 @@ public final class CustomInstrumentLibrary {
             (try? store.fetchCustomInstrumentDefs()) ?? [],
             store: store
         )
-        observation = store.observeCustomInstrumentDefs { [weak self, store] defs in
+        filesByDef = Dictionary(
+            grouping: (try? store.fetchAllCustomInstrumentFiles()) ?? [],
+            by: \.defID
+        )
+        defsObservation = store.observeCustomInstrumentDefs { [weak self, store] defs in
             let healed = Self.normalizeAndPersistIfChanged(defs, store: store)
             Task { @MainActor in
-                self?.applyChange(defs: healed)
+                self?.applyDefsChange(healed)
             }
         }
-    }
-
-    nonisolated private static func normalizeAndPersistIfChanged(
-        _ defs: [CustomInstrumentDef],
-        store: ProjectStore
-    ) -> [CustomInstrumentDef] {
-        defs.map { def in
-            var copy = def
-            copy.normalize()
-            if copy != def {
-                try? store.save(copy)
+        filesObservation = store.observeCustomInstrumentFiles { [weak self] grouped in
+            Task { @MainActor in
+                self?.applyFilesChange(grouped)
             }
-            return copy
         }
     }
 
     public func def(withId id: UUID) -> CustomInstrumentDef? {
         defs.first { $0.id == id }
+    }
+
+    public func files(forDefID id: UUID) -> [CustomInstrumentFile] {
+        filesByDef[id] ?? []
+    }
+
+    public func file(defID: UUID, path: String) -> CustomInstrumentFile? {
+        filesByDef[defID]?.first { $0.path == path }
+    }
+
+    public func bundle(forDefID id: UUID) -> CustomInstrumentBundle? {
+        guard let def = def(withId: id) else { return nil }
+        return CustomInstrumentBundle(def: def, files: files(forDefID: id))
     }
 
     public func descriptors() -> [InstrumentDescriptor] {
@@ -72,8 +82,31 @@ public final class CustomInstrumentLibrary {
         Self.initialFeatureStates(for: def)
     }
 
-    private func applyChange(defs: [CustomInstrumentDef]) {
+    nonisolated private static func normalizeAndPersistIfChanged(
+        _ defs: [CustomInstrumentDef],
+        store: ProjectStore
+    ) -> [CustomInstrumentDef] {
+        defs.map { def in
+            var copy = def
+            copy.normalize()
+            if copy != def {
+                try? store.save(copy)
+            }
+            return copy
+        }
+    }
+
+    private func applyDefsChange(_ defs: [CustomInstrumentDef]) {
         self.defs = defs
+        notifyObservers()
+    }
+
+    private func applyFilesChange(_ filesByDef: [UUID: [CustomInstrumentFile]]) {
+        self.filesByDef = filesByDef
+        notifyObservers()
+    }
+
+    private func notifyObservers() {
         for observer in observers { observer() }
     }
 }

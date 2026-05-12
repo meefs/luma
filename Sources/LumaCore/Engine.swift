@@ -74,11 +74,13 @@ public final class Engine {
     public private(set) var tracesBySession: [UUID: [ITrace]] = [:]
     public internal(set) var projectUIState: ProjectUIState = ProjectUIState()
     public internal(set) var sessionUIStates: [UUID: SessionUIState] = [:]
+    public internal(set) var customInstrumentDefUIStates: [UUID: CustomInstrumentDefUIState] = [:]
     public private(set) var missions: [Mission] = []
     public private(set) var installedPackages: [InstalledPackage] = []
     public private(set) var editorFSSnapshot: EditorFSSnapshot?
     @ObservationIgnored public var editorFSSnapshotDirty: Bool = true
     @ObservationIgnored private var editorFSSnapshotVersion: Int = 0
+    @ObservationIgnored private var cachedNodeModulesSnapshotFiles: [EditorFSSnapshotFile]?
 
     private var addressActionProviders: [AddressActionProvider] = []
     private var threadActionProviders: [ThreadActionProvider] = []
@@ -343,11 +345,12 @@ public final class Engine {
             guard let self else { return }
             switch op {
             case .upsert(let u):
-                var normalized = u.def
-                normalized.normalize()
-                try? self.store.save(normalized)
+                var bundle = u.bundle
+                bundle.def.normalize()
+                try? self.store.save(bundle.def)
+                try? self.store.replaceCustomInstrumentFiles(defID: bundle.def.id, files: bundle.files)
                 Task { @MainActor in
-                    await self.reloadCustomInstrumentInstances(def: normalized)
+                    await self.reloadCustomInstrumentInstances(defID: bundle.def.id)
                 }
             case .remove(let r):
                 try? self.store.deleteCustomInstrumentDef(id: r.defID)
@@ -362,24 +365,25 @@ public final class Engine {
             self?.applyRemoteMissionSnapshot(snapshot)
         }
 
-        collaboration.onCustomInstrumentSnapshot = { [weak self] defs in
+        collaboration.onCustomInstrumentSnapshot = { [weak self] bundles in
             guard let self else { return }
-            let serverIDs = Set(defs.map(\.id))
+            let serverIDs = Set(bundles.map(\.def.id))
             let local = (try? self.store.fetchCustomInstrumentDefs()) ?? []
             for stale in local where !serverIDs.contains(stale.id) {
                 try? self.store.deleteCustomInstrumentDef(id: stale.id)
             }
-            let normalized = defs.map { def -> CustomInstrumentDef in
-                var copy = def
-                copy.normalize()
+            let normalized = bundles.map { bundle -> CustomInstrumentBundle in
+                var copy = bundle
+                copy.def.normalize()
                 return copy
             }
-            for def in normalized {
-                try? self.store.save(def)
+            for bundle in normalized {
+                try? self.store.save(bundle.def)
+                try? self.store.replaceCustomInstrumentFiles(defID: bundle.def.id, files: bundle.files)
             }
             Task { @MainActor in
-                for def in normalized {
-                    await self.reloadCustomInstrumentInstances(def: def)
+                for bundle in normalized {
+                    await self.reloadCustomInstrumentInstances(defID: bundle.def.id)
                 }
             }
         }
@@ -927,6 +931,7 @@ public final class Engine {
         sessions = (try? store.fetchSessions()) ?? []
         projectUIState = (try? store.fetchProjectUIState()) ?? ProjectUIState()
         sessionUIStates = (try? store.fetchAllSessionUIStates()) ?? [:]
+        customInstrumentDefUIStates = (try? store.fetchAllCustomInstrumentDefUIStates()) ?? [:]
 
         sessionsObservation = store.observeSessions { [weak self] sessions in
             Task { @MainActor in
@@ -1054,7 +1059,7 @@ public final class Engine {
         do {
             let paths = try compilerWorkspacePaths()
             _ = try await compilerWorkspace.ensureReady(paths: paths)
-            let snapshot = try Self.buildEditorFSSnapshot(paths: paths)
+            let snapshot = try buildEditorFSSnapshot(paths: paths)
             editorFSSnapshotVersion += 1
             editorFSSnapshot = snapshot.withVersion(editorFSSnapshotVersion)
             editorFSSnapshotDirty = false
@@ -1063,16 +1068,26 @@ public final class Engine {
         }
     }
 
-    private static func buildEditorFSSnapshot(paths: CompilerWorkspacePaths) throws -> EditorFSSnapshot {
+    private func buildEditorFSSnapshot(paths: CompilerWorkspacePaths) throws -> EditorFSSnapshot {
+        let workspaceRootURI = "file:///workspace/"
+
+        if let cached = cachedNodeModulesSnapshotFiles {
+            return EditorFSSnapshot(version: 0, files: cached)
+        }
+        let files = try Self.scanNodeModulesSnapshotFiles(paths: paths, workspaceRootURI: workspaceRootURI)
+        cachedNodeModulesSnapshotFiles = files
+        return EditorFSSnapshot(version: 0, files: files)
+    }
+
+    private static func scanNodeModulesSnapshotFiles(
+        paths: CompilerWorkspacePaths,
+        workspaceRootURI: String
+    ) throws -> [EditorFSSnapshotFile] {
         let fm = FileManager.default
         let root = paths.root
         let nodeModules = paths.nodeModules
 
-        guard fm.fileExists(atPath: nodeModules.path) else {
-            return EditorFSSnapshot(version: 0, files: [])
-        }
-
-        let workspaceRootURI = "file:///workspace/"
+        guard fm.fileExists(atPath: nodeModules.path) else { return [] }
 
         func toWorkspaceURI(_ fileURL: URL) -> String? {
             guard fileURL.path.hasPrefix(root.path) else { return nil }
@@ -1092,7 +1107,6 @@ public final class Engine {
 
         var out: [EditorFSSnapshotFile] = []
         out.reserveCapacity(2048)
-
         while let url = enumerator?.nextObject() as? URL {
             let values = try url.resourceValues(forKeys: Set(keys))
             guard values.isRegularFile == true else { continue }
@@ -1103,8 +1117,7 @@ public final class Engine {
             guard let text = String(data: data, encoding: .utf8) else { continue }
             out.append(.init(path: uri, text: text))
         }
-
-        return EditorFSSnapshot(version: 0, files: out)
+        return out
     }
 
     public func upgradePackage(_ package: InstalledPackage) async throws -> InstalledPackage {
@@ -1118,6 +1131,7 @@ public final class Engine {
     public func removePackage(_ package: InstalledPackage) async throws {
         let paths = try compilerWorkspacePaths()
         try await compilerWorkspace.removePackage(package, paths: paths)
+        cachedNodeModulesSnapshotFiles = nil
         editorFSSnapshotDirty = true
     }
 
@@ -1160,6 +1174,7 @@ public final class Engine {
     }
 
     private func propagatePackage(_ package: InstalledPackage) async {
+        cachedNodeModulesSnapshotFiles = nil
         editorFSSnapshotDirty = true
         for node in processNodes {
             await loadPackage(package, on: node)
@@ -2306,13 +2321,13 @@ public final class Engine {
             case .custom:
                 let cfg = (try? CustomInstrumentConfig.decode(from: configJSON))
                     ?? CustomInstrumentConfig(defID: UUID(uuidString: sourceIdentifier) ?? UUID())
-                guard let def = customInstrumentDef(for: cfg) else { return }
-                if await skipIfIncompatible(instanceID: instanceID, compatibility: def.compatibility, on: node) {
+                guard let bundle = customInstrumentBundle(for: cfg) else { return }
+                if await skipIfIncompatible(instanceID: instanceID, compatibility: bundle.def.compatibility, on: node) {
                     return
                 }
                 try await loadCustomInstrument(
                     instanceID: instanceID,
-                    def: def,
+                    bundle: bundle,
                     config: cfg,
                     on: node
                 )
@@ -2329,9 +2344,18 @@ public final class Engine {
         compatibility: InstrumentCompatibility,
         on node: ProcessNode
     ) async -> Bool {
-        guard !compatibility.isUniversal else { return false }
-        guard let params = await systemParameters.parameters(for: node.device) else { return false }
-        guard let reason = compatibility.incompatibilityReason(for: params) else { return false }
+        guard !compatibility.isUniversal else {
+            node.clearInstrumentIncompatibility(id: instanceID)
+            return false
+        }
+        guard let params = await systemParameters.parameters(for: node.device) else {
+            node.clearInstrumentIncompatibility(id: instanceID)
+            return false
+        }
+        guard let reason = compatibility.incompatibilityReason(for: params) else {
+            node.clearInstrumentIncompatibility(id: instanceID)
+            return false
+        }
         node.markInstrumentIncompatible(id: instanceID, reason: reason)
         return true
     }
@@ -2733,12 +2757,13 @@ public final class Engine {
         on node: ProcessNode
     ) async throws {
         let config = try InstrumentConfigCodec.decode(HookPackConfig.self, from: configJSON)
-        let entrySource = try String(contentsOf: pack.entryURL, encoding: .utf8)
         let paths = try compilerWorkspacePaths()
-        let sourceSlug = "hookpacks/\(pack.id)"
-        let compiledSource = try await compileTypeScriptInstrumentSource(
+        let sourceSlug = "HookPacks/\(pack.id)"
+        let files = try Self.readHookPackFiles(folderURL: pack.folderURL, manifest: pack.manifest)
+        let compiledSource = try await compileTypeScriptInstrument(
             sourceSlug: sourceSlug,
-            tsSource: entrySource,
+            files: files,
+            entrypoint: pack.manifest.entrypoint,
             paths: paths,
             diagnosticLabel: "hook pack \(pack.id)"
         )
@@ -2760,15 +2785,18 @@ public final class Engine {
 
     public func loadCustomInstrument(
         instanceID: UUID,
-        def: CustomInstrumentDef,
+        bundle: CustomInstrumentBundle,
         config: CustomInstrumentConfig,
         on node: ProcessNode
     ) async throws {
+        let def = bundle.def
         let paths = try compilerWorkspacePaths()
-        let sourceSlug = "custom/\(def.id.uuidString)"
-        let compiledSource = try await compileTypeScriptInstrumentSource(
+        let sourceSlug = "Custom/\(def.id.uuidString)"
+        let files = bundle.files.map { (path: $0.path, content: Data($0.content.utf8)) }
+        let compiledSource = try await compileTypeScriptInstrument(
             sourceSlug: sourceSlug,
-            tsSource: def.source,
+            files: files,
+            entrypoint: def.entrypoint,
             paths: paths,
             diagnosticLabel: "custom instrument \(def.id.uuidString)"
         )
@@ -2853,9 +2881,10 @@ public final class Engine {
         widgetStates[instanceID]?[widget] ?? WidgetState()
     }
 
-    private func compileTypeScriptInstrumentSource(
+    private func compileTypeScriptInstrument(
         sourceSlug: String,
-        tsSource: String,
+        files: [(path: String, content: Data)],
+        entrypoint: String,
         paths: CompilerWorkspacePaths,
         diagnosticLabel: String
     ) async throws -> String {
@@ -2864,13 +2893,18 @@ public final class Engine {
         let fm = FileManager.default
         let dirRelPath = "InstrumentSources/\(sourceSlug)"
         let dirURL = paths.root.appendingPathComponent(dirRelPath, isDirectory: true)
-        if !fm.fileExists(atPath: dirURL.path) {
-            try fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: dirURL.path) {
+            try fm.removeItem(at: dirURL)
+        }
+        try fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
+
+        for file in files {
+            let fileURL = dirURL.appendingPathComponent(file.path)
+            try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try file.content.write(to: fileURL)
         }
 
-        let moduleRelPath = "\(dirRelPath)/entry.ts"
-        let moduleURL = paths.root.appendingPathComponent(moduleRelPath)
-        try tsSource.write(to: moduleURL, atomically: true, encoding: .utf8)
+        let entryRelPath = "\(dirRelPath)/\(entrypoint)"
 
         let options = BuildOptions()
         options.projectRoot = paths.root.path
@@ -2879,11 +2913,37 @@ public final class Engine {
         options.compression = .terser
 
         let bundle = try await compilerWorkspace.withCompilerDiagnostics(label: diagnosticLabel) { compiler in
-            try await compiler.build(entrypoint: moduleRelPath, options: options)
+            try await compiler.build(entrypoint: entryRelPath, options: options)
         }
 
         let modules = try ESMBundleParser.parse(bundle)
         return modules.modules[modules.order[0]]!
+    }
+
+    private static func readHookPackFiles(
+        folderURL: URL,
+        manifest: HookPackManifest
+    ) throws -> [(path: String, content: Data)] {
+        let fm = FileManager.default
+        let iconPath: String? = if case .file(let p) = manifest.icon { p } else { nil }
+        let basePath = folderURL.standardizedFileURL.path
+        let enumerator = fm.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        var result: [(path: String, content: Data)] = []
+        while let url = enumerator?.nextObject() as? URL {
+            let isDir = (try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if isDir { continue }
+            let absolute = url.standardizedFileURL.path
+            let relativePath = String(absolute.dropFirst(basePath.count + 1))
+            if relativePath == "manifest.json" { continue }
+            if relativePath == iconPath { continue }
+            let data = try Data(contentsOf: url)
+            result.append((path: relativePath, content: data))
+        }
+        return result
     }
 
     private func customInstrumentDef(for config: CustomInstrumentConfig) -> CustomInstrumentDef? {
@@ -2893,26 +2953,37 @@ public final class Engine {
         return try? store.fetchCustomInstrumentDef(id: config.defID)
     }
 
+    private func customInstrumentBundle(for config: CustomInstrumentConfig) -> CustomInstrumentBundle? {
+        if let cached = customInstruments.bundle(forDefID: config.defID) {
+            return cached
+        }
+        guard let def = try? store.fetchCustomInstrumentDef(id: config.defID),
+            let files = try? store.fetchCustomInstrumentFiles(defID: config.defID)
+        else { return nil }
+        return CustomInstrumentBundle(def: def, files: files)
+    }
+
     // MARK: - Custom Instrument Library API
 
     @discardableResult
     public func createCustomInstrument(
         name: String = "Custom Instrument",
-        icon: InstrumentIcon = .symbolic(InstrumentIconCatalog.default.id),
-        source: String = CustomInstrumentDef.exampleSource
+        icon: InstrumentIcon = .symbolic(InstrumentIconCatalog.default.id)
     ) -> CustomInstrumentDef {
         let now = Date()
         let def = CustomInstrumentDef(
             name: uniquedCustomInstrumentName(name),
             icon: icon,
-            source: source,
+            entrypoint: CustomInstrumentDef.defaultEntrypointFilename,
             features: [],
             createdAt: now,
             updatedAt: now
         )
+        let files = CustomInstrumentDef.defaultEntrypointFiles(defID: def.id)
         try? store.save(def)
+        try? store.replaceCustomInstrumentFiles(defID: def.id, files: files)
         registerDescriptor(customInstruments.descriptor(for: def))
-        broadcastCustomInstrumentUpsert(def)
+        broadcastCustomInstrumentUpsert(defID: def.id)
         onSessionListChanged?(.customInstrumentDefsChanged)
         return def
     }
@@ -2923,19 +2994,56 @@ public final class Engine {
         updated.updatedAt = Date()
         try? store.save(updated)
         registerDescriptor(customInstruments.descriptor(for: updated))
-        broadcastCustomInstrumentUpsert(updated)
+        broadcastCustomInstrumentUpsert(defID: updated.id)
         onSessionListChanged?(.customInstrumentDefsChanged)
-        await reloadCustomInstrumentInstances(def: updated)
+        await reloadCustomInstrumentInstances(defID: updated.id)
+    }
+
+    public func writeCustomInstrumentFile(defID: UUID, path: String, content: String) async {
+        let file = CustomInstrumentFile(defID: defID, path: path, content: content)
+        try? store.save(file)
+        try? store.save(touchUpdatedAt(defID: defID))
+        broadcastCustomInstrumentUpsert(defID: defID)
+        await reloadCustomInstrumentInstances(defID: defID)
+    }
+
+    public func deleteCustomInstrumentFile(defID: UUID, path: String) async {
+        try? store.deleteCustomInstrumentFile(defID: defID, path: path)
+        try? store.save(touchUpdatedAt(defID: defID))
+        broadcastCustomInstrumentUpsert(defID: defID)
+        await reloadCustomInstrumentInstances(defID: defID)
+    }
+
+    public func renameCustomInstrumentFile(defID: UUID, from: String, to: String) async {
+        try? store.renameCustomInstrumentFile(defID: defID, from: from, to: to)
+        var def = touchUpdatedAt(defID: defID)
+        if def.entrypoint == from {
+            def.entrypoint = to
+        }
+        try? store.save(def)
+        broadcastCustomInstrumentUpsert(defID: defID)
+        await reloadCustomInstrumentInstances(defID: defID)
+    }
+
+    public func setCustomInstrumentEntrypoint(defID: UUID, path: String) async {
+        var def = touchUpdatedAt(defID: defID)
+        def.entrypoint = path
+        try? store.save(def)
+        broadcastCustomInstrumentUpsert(defID: defID)
+        await reloadCustomInstrumentInstances(defID: defID)
+    }
+
+    private func touchUpdatedAt(defID: UUID) -> CustomInstrumentDef {
+        var def = customInstruments.def(withId: defID) ?? (try? store.fetchCustomInstrumentDef(id: defID))!
+        def.updatedAt = Date()
+        return def
     }
 
     @discardableResult
-    public func importCustomInstrumentFromHookPack(folderURL: URL) throws -> CustomInstrumentDef {
+    public func forkHookPackToCustomInstrument(folderURL: URL) throws -> CustomInstrumentDef {
         let manifestURL = folderURL.appendingPathComponent("manifest.json")
         let manifestData = try Data(contentsOf: manifestURL)
         let manifest = try JSONDecoder().decode(HookPackManifest.self, from: manifestData)
-
-        let entryURL = folderURL.appendingPathComponent(manifest.entry)
-        let source = try String(contentsOf: entryURL, encoding: .utf8)
 
         let icon: InstrumentIcon
         switch manifest.icon {
@@ -2948,28 +3056,36 @@ public final class Engine {
             icon = .pixels(try Data(contentsOf: iconURL))
         }
 
+        let packFiles = try Self.readHookPackFiles(folderURL: folderURL, manifest: manifest)
+
         let now = Date()
+        let defID = UUID()
         var def = CustomInstrumentDef(
-            id: UUID(),
+            id: defID,
             name: uniquedCustomInstrumentName(manifest.name),
             icon: icon,
-            source: source,
+            compatibility: manifest.compatibility,
+            entrypoint: manifest.entrypoint,
             features: manifest.features,
             widgets: manifest.widgets,
             createdAt: now,
             updatedAt: now
         )
         def.normalize()
+
+        let files = packFiles.map { pf in
+            CustomInstrumentFile(defID: defID, path: pf.path, content: String(decoding: pf.content, as: UTF8.self))
+        }
+
         try store.save(def)
+        try store.replaceCustomInstrumentFiles(defID: defID, files: files)
         registerDescriptor(customInstruments.descriptor(for: def))
-        broadcastCustomInstrumentUpsert(def)
+        broadcastCustomInstrumentUpsert(defID: defID)
         onSessionListChanged?(.customInstrumentDefsChanged)
         return def
     }
 
     public func buildHookPackBundle(for def: CustomInstrumentDef) throws -> HookPackBundle {
-        let entryName = "instrument.ts"
-
         let iconAttachment: HookPackBundle.IconAttachment?
         let manifestIcon: HookPackManifest.Icon?
         switch def.icon {
@@ -2985,7 +3101,8 @@ public final class Engine {
         let manifest = HookPackManifest(
             name: def.name,
             icon: manifestIcon,
-            entry: entryName,
+            compatibility: def.compatibility,
+            entrypoint: def.entrypoint,
             features: def.features,
             widgets: def.widgets
         )
@@ -2993,10 +3110,12 @@ public final class Engine {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let manifestData = try encoder.encode(manifest)
 
+        let defFiles = customInstruments.files(forDefID: def.id)
+        let bundleFiles = defFiles.map { HookPackBundle.File(path: $0.path, content: Data($0.content.utf8)) }
+
         return HookPackBundle(
             manifestData: manifestData,
-            entryFilename: entryName,
-            entrySource: def.source,
+            files: bundleFiles,
             icon: iconAttachment
         )
     }
@@ -3006,9 +3125,11 @@ public final class Engine {
         let fm = FileManager.default
         try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
         try bundle.manifestData.write(to: folderURL.appendingPathComponent("manifest.json"))
-        try Data(bundle.entrySource.utf8).write(
-            to: folderURL.appendingPathComponent(bundle.entryFilename)
-        )
+        for file in bundle.files {
+            let fileURL = folderURL.appendingPathComponent(file.path)
+            try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try file.content.write(to: fileURL)
+        }
         if let icon = bundle.icon {
             try icon.data.write(to: folderURL.appendingPathComponent(icon.filename))
         }
@@ -3130,14 +3251,18 @@ public final class Engine {
         return "\(proposed) \(n)"
     }
 
-    private func reloadCustomInstrumentInstances(def: CustomInstrumentDef) async {
-        let key = def.id.uuidString
+    private func reloadCustomInstrumentInstances(defID: UUID) async {
+        guard let def = try? store.fetchCustomInstrumentDef(id: defID),
+            let storeFiles = try? store.fetchCustomInstrumentFiles(defID: defID)
+        else { return }
+        let bundle = CustomInstrumentBundle(def: def, files: storeFiles)
+        let key = defID.uuidString
         for (sessionID, instances) in instrumentsBySession {
             for inst in instances where inst.kind == .custom && inst.sourceIdentifier == key && inst.state == .enabled {
                 guard let node = node(forSessionID: sessionID) else { continue }
                 let wasAttached = node.instruments.first(where: { $0.id == inst.id })?.attachment == .attached
                 let originalCfg = (try? CustomInstrumentConfig.decode(from: inst.configJSON))
-                    ?? CustomInstrumentConfig(defID: def.id)
+                    ?? CustomInstrumentConfig(defID: defID)
                 let cfg = originalCfg.normalized(against: def)
                 let liveInstance = persistNormalizedConfigIfChanged(
                     instance: inst,
@@ -3153,12 +3278,13 @@ public final class Engine {
                     node.markInstrumentDetached(id: liveInstance.id)
                 }
                 if await skipIfIncompatible(instanceID: liveInstance.id, compatibility: def.compatibility, on: node) {
+                    onSessionListChanged?(.instrumentUpdated(liveInstance))
                     continue
                 }
                 do {
                     try await loadCustomInstrument(
                         instanceID: liveInstance.id,
-                        def: def,
+                        bundle: bundle,
                         config: cfg,
                         on: node
                     )
@@ -3166,6 +3292,7 @@ public final class Engine {
                 } catch {
                     print("[Engine] Failed to reload custom instance \(liveInstance.id): \(error)")
                 }
+                onSessionListChanged?(.instrumentUpdated(liveInstance))
             }
         }
     }
@@ -3185,8 +3312,12 @@ public final class Engine {
         return updated
     }
 
-    private func broadcastCustomInstrumentUpsert(_ def: CustomInstrumentDef) {
-        let op = CustomInstrumentOp.upsert(.init(def: def))
+    private func broadcastCustomInstrumentUpsert(defID: UUID) {
+        guard let def = try? store.fetchCustomInstrumentDef(id: defID),
+            let files = try? store.fetchCustomInstrumentFiles(defID: defID)
+        else { return }
+        let bundle = CustomInstrumentBundle(def: def, files: files)
+        let op = CustomInstrumentOp.upsert(.init(bundle: bundle))
         try? store.saveCustomInstrumentOutboxOp(op)
         collaboration.sendCustomInstrumentOpIfJoined(op)
     }

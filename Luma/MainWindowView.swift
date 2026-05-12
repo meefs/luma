@@ -494,7 +494,7 @@ struct ProjectToolbar: ToolbarContent {
         guard let id = selection else { return nil }
 
         switch id {
-        case .notebook, .missions, .mission(_), .package(_), .customInstrumentDef(_):
+        case .notebook, .missions, .mission(_), .package(_), .customInstrumentDef(_), .customInstrumentFile(_, _):
             return nil
 
         case .session(let sessionID),
@@ -511,7 +511,7 @@ struct ProjectToolbar: ToolbarContent {
         guard let id = selection else { return nil }
 
         switch id {
-        case .notebook, .missions, .mission(_), .package(_), .customInstrumentDef(_):
+        case .notebook, .missions, .mission(_), .package(_), .customInstrumentDef(_), .customInstrumentFile(_, _):
             return nil
         case .session(let sessionID),
             .repl(let sessionID),

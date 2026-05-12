@@ -90,7 +90,11 @@ struct DetailView: View {
                 }
 
             case .some(.customInstrumentDef(let defID)):
-                CustomInstrumentEditorView(defID: defID, engine: engine)
+                CustomInstrumentEditorView(defID: defID, path: nil, engine: engine)
+                    .id(defID)
+
+            case .some(.customInstrumentFile(let defID, let path)):
+                CustomInstrumentEditorView(defID: defID, path: path, engine: engine)
                     .id(defID)
 
             case .some(.package(let packageID)):

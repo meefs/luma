@@ -250,7 +250,7 @@ struct AddInstrumentSheet: View {
         if let added {
             onInstrumentAdded?(added)
         }
-        selection = .customInstrumentDef(def.id)
+        selection = .customInstrumentFile(def.id, def.entrypoint)
         dismiss()
     }
 
@@ -287,7 +287,7 @@ struct AddInstrumentSheet: View {
         let started = folderURL.startAccessingSecurityScopedResource()
         defer { if started { folderURL.stopAccessingSecurityScopedResource() } }
         do {
-            let def = try engine.importCustomInstrumentFromHookPack(folderURL: folderURL)
+            let def = try engine.forkHookPackToCustomInstrument(folderURL: folderURL)
             Task { @MainActor in
                 let configJSON = CustomInstrumentConfig(
                     defID: def.id,
@@ -302,7 +302,7 @@ struct AddInstrumentSheet: View {
                 if let added {
                     onInstrumentAdded?(added)
                 }
-                selection = .customInstrumentDef(def.id)
+                selection = .customInstrumentFile(def.id, def.entrypoint)
                 dismiss()
             }
         } catch {
@@ -377,6 +377,14 @@ struct AddInstrumentSheet: View {
                 dismiss()
             }
         }
+        if let pack = selectedHookPack {
+            ToolbarItem(placement: .automatic) {
+                Button("Edit a Copy\u{2026}") {
+                    forkSelectedPack(pack)
+                }
+                .accessibilityIdentifier("addInstrument.editCopy")
+            }
+        }
         ToolbarItem(placement: .confirmationAction) {
             Button(confirmActionLabel) {
                 commitCoordinator.flushPendingEdits()
@@ -411,6 +419,22 @@ struct AddInstrumentSheet: View {
                 onBrowseCodeShare()
                 dismiss()
             }
+        }
+    }
+
+    private var selectedHookPack: LumaCore.HookPack? {
+        guard let descriptor = selectedDescriptor, descriptor.kind == .hookPack else { return nil }
+        return engine.hookPacks.pack(withId: descriptor.sourceIdentifier)
+    }
+
+    @MainActor
+    private func forkSelectedPack(_ pack: LumaCore.HookPack) {
+        do {
+            let def = try engine.forkHookPackToCustomInstrument(folderURL: pack.folderURL)
+            selection = .customInstrumentFile(def.id, def.entrypoint)
+            dismiss()
+        } catch {
+            importErrorMessage = error.localizedDescription
         }
     }
 }

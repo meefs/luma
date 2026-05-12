@@ -845,7 +845,7 @@ final class AddInstrumentDialog {
         let sessionID = self.sessionID
         let onAdded = self.onAdded
         do {
-            let def = try engine.importCustomInstrumentFromHookPack(folderURL: folderURL)
+            let def = try engine.forkHookPackToCustomInstrument(folderURL: folderURL)
             Task { @MainActor in
                 let configJSON = CustomInstrumentConfig(
                     defID: def.id,

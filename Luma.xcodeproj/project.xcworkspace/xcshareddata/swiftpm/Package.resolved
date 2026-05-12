@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
-        "revision" : "9f542610331815e29cc3821d3b6f488db8715517",
-        "version" : "1.6.0"
+        "revision" : "eb50cbd14606a9161cbc5d452f18797c90ef0bab",
+        "version" : "1.7.0"
       }
     },
     {
@@ -52,7 +52,7 @@
       "location" : "https://github.com/frida/SwiftyMonaco",
       "state" : {
         "branch" : "main",
-        "revision" : "2e397f7f393d16dd59fde60f03aa55c2bff7c05c"
+        "revision" : "b4907bb40723b7abf50f7520d6b1a05e340f936b"
       }
     },
     {
@@ -61,7 +61,7 @@
       "location" : "https://github.com/radareorg/SwiftyR2",
       "state" : {
         "branch" : "main",
-        "revision" : "a7ac469644dd74a03a4138af6cc4dd5c3905281a"
+        "revision" : "2b13fd5f4337c74b3c2888e324e3eb3fd262874c"
       }
     }
   ],

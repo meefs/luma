@@ -8,7 +8,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
     public var name: String
     public var icon: InstrumentIcon
     public var compatibility: InstrumentCompatibility
-    public var source: String
+    public var entrypoint: String
     public var features: [Feature]
     public var widgets: [InstrumentWidget]
     public var createdAt: Date
@@ -41,7 +41,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
         name: String,
         icon: InstrumentIcon = .symbolic(InstrumentIconCatalog.default.id),
         compatibility: InstrumentCompatibility = .universal,
-        source: String = CustomInstrumentDef.exampleSource,
+        entrypoint: String,
         features: [Feature] = [],
         widgets: [InstrumentWidget] = [],
         createdAt: Date = Date(),
@@ -51,7 +51,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
         self.name = name
         self.icon = icon
         self.compatibility = compatibility
-        self.source = source
+        self.entrypoint = entrypoint
         self.features = features
         self.widgets = widgets
         self.createdAt = createdAt
@@ -64,7 +64,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
         icon = InstrumentIcon.decodedJSONString(row["icon"])
         let compatibilityJSON: String = row["compatibility_json"]
         compatibility = try JSONDecoder().decode(InstrumentCompatibility.self, from: Data(compatibilityJSON.utf8))
-        source = row["source"]
+        entrypoint = row["entrypoint"]
         let featuresJSON: String = row["features_json"]
         features = try JSONDecoder().decode([Feature].self, from: Data(featuresJSON.utf8))
         let widgetsJSON: String = row["widgets_json"]
@@ -78,7 +78,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
         container["name"] = name
         container["icon"] = icon.encodedJSONString()
         container["compatibility_json"] = compatibilityJSONString
-        container["source"] = source
+        container["entrypoint"] = entrypoint
         container["features_json"] = featuresJSONString
         container["widgets_json"] = widgetsJSONString
         container["created_at"] = createdAt
@@ -90,7 +90,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
             "id": id.uuidString,
             "name": name,
             "icon": icon.toJSON(),
-            "source": source,
+            "entrypoint": entrypoint,
             "features": features.map(featureToJSON),
             "widgets": widgetsJSONArray,
             "created_at": ISO8601DateFormatter().string(from: createdAt),
@@ -106,7 +106,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
         guard let idStr = obj["id"] as? String, let id = UUID(uuidString: idStr),
             let name = obj["name"] as? String,
             let icon = InstrumentIcon.fromJSON(obj["icon"]),
-            let source = obj["source"] as? String
+            let entrypoint = obj["entrypoint"] as? String
         else { return nil }
         let compatibility = parseCompatibility(obj["compatibility"])
         let features = parseFeatures(obj["features"])
@@ -119,7 +119,7 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
             name: name,
             icon: icon,
             compatibility: compatibility,
-            source: source,
+            entrypoint: entrypoint,
             features: features,
             widgets: widgets,
             createdAt: createdAt,
@@ -246,7 +246,13 @@ public struct CustomInstrumentDef: Codable, Identifiable, Sendable, Equatable, F
         }
     }
 
-    public static let exampleSource: String = """
+    public static let defaultEntrypointFilename = "main.ts"
+
+    public static func defaultEntrypointFiles(defID: UUID) -> [CustomInstrumentFile] {
+        [CustomInstrumentFile(defID: defID, path: defaultEntrypointFilename, content: defaultEntrypointSource)]
+    }
+
+    public static let defaultEntrypointSource: String = """
         // A custom instrument is a regular Frida agent module. It runs in
         // the target process and exports an `instrument` object that the
         // host loads via the standard instrument lifecycle.

@@ -13,7 +13,7 @@ public enum CustomInstrumentOp: Sendable {
 
     public var defID: UUID {
         switch self {
-        case .upsert(let u): return u.def.id
+        case .upsert(let u): return u.bundle.def.id
         case .remove(let r): return r.defID
         }
     }
@@ -27,11 +27,11 @@ public enum CustomInstrumentOp: Sendable {
 
     public struct Upsert: Sendable {
         public let opID: UUID
-        public var def: CustomInstrumentDef
+        public var bundle: CustomInstrumentBundle
 
-        public init(opID: UUID = UUID(), def: CustomInstrumentDef) {
+        public init(opID: UUID = UUID(), bundle: CustomInstrumentBundle) {
             self.opID = opID
-            self.def = def
+            self.bundle = bundle
         }
     }
 
@@ -52,7 +52,7 @@ public enum CustomInstrumentOp: Sendable {
         ]
         switch self {
         case .upsert(let u):
-            obj["def"] = u.def.toJSON()
+            obj["bundle"] = u.bundle.toJSON()
         case .remove(let r):
             obj["def_id"] = r.defID.uuidString
         }
@@ -67,10 +67,10 @@ public enum CustomInstrumentOp: Sendable {
 
         switch kind {
         case "upsert":
-            guard let defObj = obj["def"] as? [String: Any],
-                let def = CustomInstrumentDef.fromJSON(defObj)
+            guard let bundleObj = obj["bundle"] as? [String: Any],
+                let bundle = CustomInstrumentBundle.fromJSON(bundleObj)
             else { return nil }
-            return .upsert(Upsert(opID: opID, def: def))
+            return .upsert(Upsert(opID: opID, bundle: bundle))
         case "remove":
             guard let defIDStr = obj["def_id"] as? String,
                 let defID = UUID(uuidString: defIDStr)

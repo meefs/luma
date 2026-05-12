@@ -11,6 +11,12 @@ extension MonacoExtraLib {
     }
 }
 
+extension MonacoProjectFile {
+    init(from file: LumaCore.EditorProjectFile) {
+        self.init(path: file.path, text: file.text, languageId: file.languageId)
+    }
+}
+
 extension TypeScriptCompilerOptions {
     init(from options: LumaCore.EditorCompilerOptions) {
         self.init(
@@ -39,6 +45,8 @@ extension MonacoEditorProfile {
     init(from profile: LumaCore.EditorProfile) {
         self.init(
             syntax: .monaco(languageId: profile.languageId),
+            projectFiles: profile.projectFiles.map { MonacoProjectFile(from: $0) },
+            activePath: profile.activePath,
             tsCompilerOptions: profile.tsCompilerOptions.isEmpty
                 ? nil : TypeScriptCompilerOptions(from: profile.tsCompilerOptions),
             tsExtraLibs: profile.tsExtraLibs.map { MonacoExtraLib(from: $0) },

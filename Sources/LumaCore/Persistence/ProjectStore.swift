@@ -402,6 +402,21 @@ public final class ProjectStore: Sendable {
         }
     }
 
+    // MARK: - Custom Instrument Def UI State
+
+    public func fetchAllCustomInstrumentDefUIStates() throws -> [UUID: CustomInstrumentDefUIState] {
+        try db.read { db in
+            let rows = try CustomInstrumentDefUIState.fetchAll(db)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.defID, $0) })
+        }
+    }
+
+    public func save(_ state: CustomInstrumentDefUIState) throws {
+        try db.write { db in
+            try state.save(db)
+        }
+    }
+
     // MARK: - ITraces
 
     public func fetchITraces(sessionID: UUID) throws -> [ITrace] {
@@ -789,6 +804,85 @@ public final class ProjectStore: Sendable {
         }
     }
 
+    // MARK: - Custom Instrument Files
+
+    public func observeCustomInstrumentFiles(
+        onChange: @escaping @Sendable ([UUID: [CustomInstrumentFile]]) -> Void
+    ) -> StoreObservation {
+        StoreObservation(
+            ValueObservation
+                .tracking { db in
+                    try CustomInstrumentFile
+                        .order(Column("def_id").asc, Column("path").asc)
+                        .fetchAll(db)
+                }
+                .start(in: db, scheduling: .async(onQueue: .main), onError: { _ in }) { files in
+                    onChange(Dictionary(grouping: files, by: \.defID))
+                }
+        )
+    }
+
+    public func fetchAllCustomInstrumentFiles() throws -> [CustomInstrumentFile] {
+        try db.read { db in
+            try CustomInstrumentFile
+                .order(Column("def_id").asc, Column("path").asc)
+                .fetchAll(db)
+        }
+    }
+
+    public func fetchCustomInstrumentFiles(defID: UUID) throws -> [CustomInstrumentFile] {
+        try db.read { db in
+            try CustomInstrumentFile
+                .filter(Column("def_id") == defID.uuidString)
+                .order(Column("path").asc)
+                .fetchAll(db)
+        }
+    }
+
+    public func fetchCustomInstrumentFile(defID: UUID, path: String) throws -> CustomInstrumentFile? {
+        try db.read { db in
+            try CustomInstrumentFile
+                .filter(Column("def_id") == defID.uuidString && Column("path") == path)
+                .fetchOne(db)
+        }
+    }
+
+    public func save(_ file: CustomInstrumentFile) throws {
+        try db.write { db in
+            try file.save(db)
+        }
+    }
+
+    public func deleteCustomInstrumentFile(defID: UUID, path: String) throws {
+        try db.write { db in
+            try db.execute(
+                sql: "DELETE FROM custom_instrument_file WHERE def_id = ? AND path = ?",
+                arguments: [defID.uuidString, path]
+            )
+        }
+    }
+
+    public func renameCustomInstrumentFile(defID: UUID, from: String, to: String) throws {
+        try db.write { db in
+            try db.execute(
+                sql: "UPDATE custom_instrument_file SET path = ? WHERE def_id = ? AND path = ?",
+                arguments: [to, defID.uuidString, from]
+            )
+        }
+    }
+
+    public func replaceCustomInstrumentFiles(defID: UUID, files: [CustomInstrumentFile]) throws {
+        try db.write { db in
+            try db.execute(
+                sql: "DELETE FROM custom_instrument_file WHERE def_id = ?",
+                arguments: [defID.uuidString]
+            )
+            for file in files {
+                try file.save(db)
+            }
+        }
+    }
+
     // MARK: - Custom Instrument Outbox
 
     public func saveCustomInstrumentOutboxOp(_ op: CustomInstrumentOp) throws {
@@ -1035,6 +1129,7 @@ public final class ProjectStore: Sendable {
         try db.create(table: "session_ui_state", ifNotExists: true) { t in
             t.primaryKey("session_id", .text).notNull()
                 .references("process_session", onDelete: .cascade)
+            t.column("sidebar_expansion", .text).notNull().defaults(to: SidebarExpansion.expanded.rawValue)
             t.column("detail_section", .text)
             t.column("last_selected_module_id", .text)
             t.column("last_selected_thread_id", .integer)
@@ -1087,11 +1182,25 @@ public final class ProjectStore: Sendable {
             t.column("name", .text).notNull()
             t.column("icon", .text).notNull()
             t.column("compatibility_json", .text).notNull().defaults(to: "{}")
-            t.column("source", .text).notNull()
+            t.column("entrypoint", .text).notNull()
             t.column("features_json", .text).notNull().defaults(to: "[]")
             t.column("widgets_json", .text).notNull().defaults(to: "[]")
             t.column("created_at", .datetime).notNull()
             t.column("updated_at", .datetime).notNull()
+        }
+
+        try db.create(table: "custom_instrument_file", ifNotExists: true) { t in
+            t.column("def_id", .text).notNull()
+                .references("custom_instrument_def", onDelete: .cascade)
+            t.column("path", .text).notNull()
+            t.column("content", .text).notNull()
+            t.primaryKey(["def_id", "path"])
+        }
+
+        try db.create(table: "custom_instrument_def_ui_state", ifNotExists: true) { t in
+            t.primaryKey("def_id", .text).notNull()
+                .references("custom_instrument_def", onDelete: .cascade)
+            t.column("sidebar_expansion", .text).notNull().defaults(to: SidebarExpansion.expanded.rawValue)
         }
 
         try db.create(table: "widget_state", ifNotExists: true) { t in

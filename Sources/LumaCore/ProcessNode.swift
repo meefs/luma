@@ -1053,6 +1053,12 @@ public final class ProcessNode: Identifiable {
         }
     }
 
+    public func clearInstrumentIncompatibility(id: UUID) {
+        if let i = instruments.firstIndex(where: { $0.id == id }) {
+            instruments[i].incompatibilityReason = nil
+        }
+    }
+
     public func updateInstrumentConfig(id: UUID, configJSON: Data) {
         if let i = instruments.firstIndex(where: { $0.id == id }) {
             instruments[i].configJSON = configJSON

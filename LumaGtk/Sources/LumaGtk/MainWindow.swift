@@ -22,6 +22,7 @@ final class MainWindow {
     private let customInstrumentsList: ListBox = ListBox()
     private var customInstrumentsHeaderLabel: Label!
     private var customInstrumentDefs: [LumaCore.CustomInstrumentDef] = []
+    private var customInstrumentRows: [CustomInstrumentRow] = []
     private var sessionsHeaderLabel: Label!
     private var packagesHeaderLabel: Label!
     private var sessionsSection: Box!
@@ -96,8 +97,13 @@ final class MainWindow {
         case itrace(sessionID: UUID, traceID: UUID)
         case package(UUID)
         case customInstrumentDef(UUID)
+        case customInstrumentFile(UUID, String)
         case missionsList
         case mission(UUID)
+    }
+
+    private enum CustomInstrumentRow: Equatable {
+        case file(defID: UUID, path: String)
     }
 
     private enum SessionsRow: Equatable {
@@ -441,7 +447,8 @@ final class MainWindow {
                 let id = UUID(uuidString: idStr)
             else { return }
             Task { @MainActor in
-                self?.select(.customInstrumentDef(id))
+                guard let self else { return }
+                self.select(self.selectionForCustomInstrument(defID: id))
             }
         }
         engine.populateSessionList()
@@ -990,8 +997,10 @@ final class MainWindow {
             MainActor.assumeIsolated {
                 guard let self, let row else { return }
                 let index = Int(row.index)
-                guard index >= 0, index < self.customInstrumentDefs.count else { return }
-                self.select(.customInstrumentDef(self.customInstrumentDefs[index].id))
+                guard index >= 0, index < self.customInstrumentRows.count else { return }
+                if case .file(let defID, let path) = self.customInstrumentRows[index] {
+                    self.select(.customInstrumentFile(defID, path))
+                }
             }
         }
 
@@ -1026,31 +1035,141 @@ final class MainWindow {
             child = current.nextSibling
             customInstrumentsList.remove(child: current)
         }
+
+        var rows: [CustomInstrumentRow] = []
         for def in defs {
-            let row = ListBoxRow()
-            let box = Box(orientation: .horizontal, spacing: 8)
-            box.marginStart = 12
-            box.marginEnd = 12
-            box.marginTop = 6
-            box.marginBottom = 6
-            box.append(child: InstrumentIconView.makeImage(for: def.icon, pixelSize: 16))
-            let label = Label(str: def.name)
-            label.halign = .start
-            label.hexpand = true
-            box.append(child: label)
-            row.set(child: box)
-            attachCustomInstrumentContextMenu(row: row, anchor: box, def: def)
-            customInstrumentsList.append(child: row)
+            let auxiliaryFiles = CustomInstrumentFile.sortedByPath(
+                engine.customInstruments.files(forDefID: def.id).filter { $0.path != def.entrypoint },
+                entrypoint: def.entrypoint
+            )
+            let expansion = engine.sidebarExpansion(forCustomInstrumentDefID: def.id)
+            let isExpanded = auxiliaryFiles.isEmpty || expansion == .expanded
+            customInstrumentsList.append(child: makeCustomInstrumentDefRow(
+                def: def,
+                hasAuxiliaryFiles: !auxiliaryFiles.isEmpty,
+                isExpanded: isExpanded
+            ))
+            rows.append(.file(defID: def.id, path: def.entrypoint))
+
+            if isExpanded {
+                for file in auxiliaryFiles {
+                    customInstrumentsList.append(child: makeCustomInstrumentFileRow(def: def, file: file))
+                    rows.append(.file(defID: def.id, path: file.path))
+                }
+            }
         }
+        customInstrumentRows = rows
         customInstrumentsHeaderLabel?.label = "CUSTOM INSTRUMENTS (\(defs.count))"
         customInstrumentsSection?.visible = !defs.isEmpty
 
-        if case .customInstrumentDef(let id) = selection,
-            !defs.contains(where: { $0.id == id })
-        {
-            select(.notebook)
-            notebookListBox.select(row: notebookRow)
+        invalidateStaleCustomInstrumentSelection(defs: defs, engine: engine)
+    }
+
+    private func invalidateStaleCustomInstrumentSelection(
+        defs: [LumaCore.CustomInstrumentDef],
+        engine: Engine
+    ) {
+        switch selection {
+        case .customInstrumentDef(let id):
+            if !defs.contains(where: { $0.id == id }) {
+                select(.notebook)
+                notebookListBox.select(row: notebookRow)
+            }
+        case .customInstrumentFile(let id, let path):
+            if !defs.contains(where: { $0.id == id }) {
+                select(.notebook)
+                notebookListBox.select(row: notebookRow)
+            } else if engine.customInstruments.file(defID: id, path: path) == nil {
+                select(.customInstrumentDef(id))
+            }
+        default:
+            break
         }
+    }
+
+    private func makeCustomInstrumentDefRow(
+        def: LumaCore.CustomInstrumentDef,
+        hasAuxiliaryFiles: Bool,
+        isExpanded: Bool
+    ) -> ListBoxRow {
+        let row = ListBoxRow()
+        let box = Box(orientation: .horizontal, spacing: 6)
+        box.marginStart = 12
+        box.marginEnd = 12
+        box.marginTop = 4
+        box.marginBottom = 4
+
+        if hasAuxiliaryFiles {
+            box.append(child: makeCustomInstrumentChevron(isExpanded: isExpanded) { [weak self] in
+                self?.toggleCustomInstrumentExpansion(defID: def.id)
+            })
+        }
+
+        box.append(child: InstrumentIconView.makeImage(for: def.icon, pixelSize: 16))
+        let label = Label(str: def.name)
+        label.halign = .start
+        label.hexpand = true
+        box.append(child: label)
+        row.set(child: box)
+        attachCustomInstrumentContextMenu(row: row, anchor: box, def: def)
+        return row
+    }
+
+    private func toggleCustomInstrumentExpansion(defID: UUID) {
+        guard let engine else { return }
+        let current = engine.sidebarExpansion(forCustomInstrumentDefID: defID)
+        let next: SidebarExpansion = current == .expanded ? .collapsed : .expanded
+        engine.setSidebarExpansion(customInstrumentDefID: defID, next)
+        Task { @MainActor [weak self] in
+            self?.renderCustomInstruments()
+        }
+    }
+
+    private func makeCustomInstrumentChevron(isExpanded: Bool, onToggle: @escaping () -> Void) -> Widget {
+        let chevronImage = Gtk.Image(iconName: isExpanded ? "pan-down-symbolic" : "pan-end-symbolic")
+        chevronImage.pixelSize = 12
+        chevronImage.add(cssClass: "dim-label")
+        let button = Button()
+        button.set(child: chevronImage)
+        button.add(cssClass: "flat")
+        button.add(cssClass: "circular")
+        button.valign = .center
+        button.onClicked { _ in
+            MainActor.assumeIsolated { onToggle() }
+        }
+        return button
+    }
+
+    private func makeCustomInstrumentFileRow(
+        def: LumaCore.CustomInstrumentDef,
+        file: LumaCore.CustomInstrumentFile
+    ) -> ListBoxRow {
+        let row = ListBoxRow()
+        let box = Box(orientation: .horizontal, spacing: 6)
+        box.marginStart = 12
+        box.marginEnd = 12
+        box.marginTop = 2
+        box.marginBottom = 2
+
+        let indentSlot = makeCustomInstrumentChevron(isExpanded: true) {}
+        indentSlot.opacity = 0
+        indentSlot.sensitive = false
+        indentSlot.canFocus = false
+        box.append(child: indentSlot)
+
+        let icon = Gtk.Image(iconName: "text-x-generic-symbolic")
+        icon.pixelSize = 12
+        box.append(child: icon)
+        let label = Label(str: file.path)
+        label.halign = .start
+        label.hexpand = true
+        if file.path == def.entrypoint {
+            label.add(cssClass: "heading")
+        }
+        box.append(child: label)
+        row.set(child: box)
+        attachCustomInstrumentFileContextMenu(row: row, anchor: box, def: def, file: file)
+        return row
     }
 
     private func refreshInstrumentRowVisuals() {
@@ -1092,9 +1211,49 @@ final class MainWindow {
 
     private func refreshCustomInstrumentDefPane() {
         guard let pane = currentCustomInstrumentDefPane,
-            let updated = engine?.customInstruments.def(withId: pane.def.id)
+            let engine,
+            let updated = engine.customInstruments.def(withId: pane.def.id),
+            let file = engine.customInstruments.file(defID: pane.def.id, path: pane.file.path)
+                ?? engine.customInstruments.files(forDefID: pane.def.id).first
         else { return }
-        pane.refresh(def: updated)
+        pane.refresh(def: updated, file: file)
+    }
+
+    private func customInstrumentPaneWidget(defID: UUID, path: String?) -> Widget {
+        guard let engine, let def = engine.customInstruments.def(withId: defID) else {
+            return MainWindow.makeEmptyState(
+                icon: "applications-utilities-symbolic",
+                title: "Custom instrument unavailable",
+                subtitle: "This custom instrument is no longer in the project."
+            )
+        }
+        let resolvedPath = path ?? def.entrypoint
+        guard let file = engine.customInstruments.file(defID: defID, path: resolvedPath)
+            ?? engine.customInstruments.files(forDefID: defID).first
+        else {
+            return MainWindow.makeEmptyState(
+                icon: "text-x-generic-symbolic",
+                title: "File unavailable",
+                subtitle: "This file no longer exists in the instrument."
+            )
+        }
+        let pane: CustomInstrumentDefPane
+        if let existing = currentCustomInstrumentDefPane, existing.def.id == defID {
+            existing.refresh(def: def, file: file)
+            pane = existing
+        } else {
+            pane = CustomInstrumentDefPane(
+                engine: engine,
+                def: def,
+                file: file,
+                sourceEditor: sharedCustomInstrumentEditor
+            )
+            currentCustomInstrumentDefPane = pane
+        }
+        if pane.widget.parent != nil {
+            pane.widget.unparent()
+        }
+        return pane.widget
     }
 
     private func instrument(withID id: UUID) -> LumaCore.InstrumentInstance? {
@@ -1134,12 +1293,127 @@ final class MainWindow {
                 .init("Compatibility\u{2026}") { [weak self] in self?.presentCustomInstrumentCompatibilityDialog(def: def) },
                 .init("Features\u{2026}") { [weak self] in self?.presentCustomInstrumentFeaturesDialog(def: def) },
                 .init("Widgets\u{2026}") { [weak self] in self?.presentCustomInstrumentWidgetsDialog(def: def) },
+            ],
+            [
+                .init("Add File\u{2026}") { [weak self] in self?.presentAddCustomInstrumentFileDialog(def: def) },
+                .init("Rename Entrypoint File\u{2026}") { [weak self] in
+                    guard let self else { return }
+                    self.presentRenameEntrypointFileDialog(def: def)
+                },
+            ],
+            [
                 .init("Export as Hookpack\u{2026}") { [weak self] in self?.presentExportHookPackDialog(def: def) },
             ],
             [.init("Delete Custom Instrument", destructive: true) { [weak self] in
                 self?.confirmDeleteCustomInstrument(def: def)
             }],
         ], at: anchor, x: x, y: y)
+    }
+
+    private func attachCustomInstrumentFileContextMenu(
+        row: ListBoxRow,
+        anchor: Widget,
+        def: LumaCore.CustomInstrumentDef,
+        file: LumaCore.CustomInstrumentFile
+    ) {
+        let click = GestureClick()
+        click.set(button: 3)
+        click.onPressed { [weak self, anchor] _, _, x, y in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.presentCustomInstrumentFileContextMenu(anchor: anchor, x: x, y: y, def: def, file: file)
+            }
+        }
+        row.install(controller: click)
+    }
+
+    private func presentCustomInstrumentFileContextMenu(
+        anchor: Widget,
+        x: Double,
+        y: Double,
+        def: LumaCore.CustomInstrumentDef,
+        file: LumaCore.CustomInstrumentFile
+    ) {
+        let isEntrypoint = file.path == def.entrypoint
+        var sections: [[ContextMenu.Item]] = []
+        if !isEntrypoint {
+            sections.append([
+                .init("Set as Entrypoint") { [weak self] in self?.setCustomInstrumentEntrypoint(defID: def.id, path: file.path) }
+            ])
+        }
+        sections.append([
+            .init("Rename\u{2026}") { [weak self] in self?.presentRenameCustomInstrumentFileDialog(def: def, file: file) }
+        ])
+        if !isEntrypoint {
+            sections.append([
+                .init("Delete", destructive: true) { [weak self] in
+                    self?.confirmDeleteCustomInstrumentFile(def: def, file: file)
+                }
+            ])
+        }
+        ContextMenu.present(sections, at: anchor, x: x, y: y)
+    }
+
+    private func presentAddCustomInstrumentFileDialog(def: LumaCore.CustomInstrumentDef) {
+        guard let engine else { return }
+        CustomInstrumentFileDialogs.presentAdd(engine: engine, def: def, parent: window) { [weak self] newPath in
+            self?.select(.customInstrumentFile(def.id, newPath))
+        }
+    }
+
+    private func presentRenameCustomInstrumentFileDialog(
+        def: LumaCore.CustomInstrumentDef,
+        file: LumaCore.CustomInstrumentFile
+    ) {
+        guard let engine else { return }
+        CustomInstrumentFileDialogs.presentRename(engine: engine, def: def, file: file, parent: window) { [weak self] newPath in
+            if self?.selection == .customInstrumentFile(def.id, file.path) {
+                self?.select(.customInstrumentFile(def.id, newPath))
+            }
+        }
+    }
+
+    private func selectionForCustomInstrument(defID: UUID) -> SidebarSelection {
+        if let entrypoint = engine?.customInstruments.def(withId: defID)?.entrypoint {
+            return .customInstrumentFile(defID, entrypoint)
+        }
+        return .customInstrumentDef(defID)
+    }
+
+    private func presentRenameEntrypointFileDialog(def: LumaCore.CustomInstrumentDef) {
+        guard let engine,
+            let file = engine.customInstruments.file(defID: def.id, path: def.entrypoint)
+        else { return }
+        presentRenameCustomInstrumentFileDialog(def: def, file: file)
+    }
+
+    private func setCustomInstrumentEntrypoint(defID: UUID, path: String) {
+        guard let engine else { return }
+        Task { @MainActor in
+            await engine.setCustomInstrumentEntrypoint(defID: defID, path: path)
+        }
+    }
+
+    private func confirmDeleteCustomInstrumentFile(
+        def: LumaCore.CustomInstrumentDef,
+        file: LumaCore.CustomInstrumentFile
+    ) {
+        confirmDestructive(
+            message: "Delete \"\(file.path)\"?",
+            detail: "Removes this file from the instrument.",
+            destructiveLabel: "Delete"
+        ) { [weak self] in
+            guard let self, let engine = self.engine else { return }
+            let defID = def.id
+            let path = file.path
+            let entrypoint = def.entrypoint
+            Task { @MainActor in
+                await engine.deleteCustomInstrumentFile(defID: defID, path: path)
+                if self.selection == .customInstrumentFile(defID, path) {
+                    self.select(.customInstrumentFile(defID, entrypoint))
+                }
+            }
+        }
     }
 
     private func presentExportHookPackDialog(def: LumaCore.CustomInstrumentDef) {
@@ -1306,11 +1580,14 @@ final class MainWindow {
             currentITraceDetail = nil
             currentITraceID = nil
         }
-        if case .customInstrumentDef(let defID) = selection {
+        switch selection {
+        case .customInstrumentDef(let defID), .customInstrumentFile(let defID, _):
             if currentCustomInstrumentDefPane?.def.id != defID {
+                currentCustomInstrumentDefPane?.flushDraftIfNeeded()
                 currentCustomInstrumentDefPane = nil
             }
-        } else {
+        default:
+            currentCustomInstrumentDefPane?.flushDraftIfNeeded()
             currentCustomInstrumentDefPane = nil
         }
         if case .mission(let id) = selection {
@@ -1419,22 +1696,9 @@ final class MainWindow {
                 )
             }
         case .customInstrumentDef(let defID):
-            if let engine, let def = engine.customInstruments.def(withId: defID) {
-                let pane = currentCustomInstrumentDefPane
-                    ?? CustomInstrumentDefPane(
-                        engine: engine,
-                        def: def,
-                        sourceEditor: sharedCustomInstrumentEditor
-                    )
-                currentCustomInstrumentDefPane = pane
-                widget = pane.widget
-            } else {
-                widget = MainWindow.makeEmptyState(
-                    icon: "applications-utilities-symbolic",
-                    title: "Custom instrument unavailable",
-                    subtitle: "This custom instrument is no longer in the project."
-                )
-            }
+            widget = customInstrumentPaneWidget(defID: defID, path: nil)
+        case .customInstrumentFile(let defID, let path):
+            widget = customInstrumentPaneWidget(defID: defID, path: path)
         case .package(let id):
             if let package = installedPackages.first(where: { $0.id == id }), let engine {
                 let pane = PackageDetailPane(engine: engine, package: package)
@@ -1658,7 +1922,7 @@ final class MainWindow {
             ) { [weak self] instance in
                 guard let self else { return }
                 if instance.kind == .custom, let defID = UUID(uuidString: instance.sourceIdentifier) {
-                    self.select(.customInstrumentDef(defID))
+                    self.select(self.selectionForCustomInstrument(defID: defID))
                 } else {
                     self.select(.instrument(sessionID: sessionID, instrumentID: instance.id))
                 }
@@ -1798,7 +2062,18 @@ final class MainWindow {
             sessionsList.unselectAll()
             packagesList.unselectAll()
             missionsListBox.unselectAll()
-            if let idx = customInstrumentDefs.firstIndex(where: { $0.id == defID }),
+            if let def = engine?.customInstruments.def(withId: defID),
+                let idx = customInstrumentRows.firstIndex(of: .file(defID: defID, path: def.entrypoint)),
+                let row = customInstrumentsList.getRowAt(index: idx)
+            {
+                customInstrumentsList.select(row: row)
+            }
+        case .customInstrumentFile(let defID, let path):
+            notebookListBox.unselectAll()
+            sessionsList.unselectAll()
+            packagesList.unselectAll()
+            missionsListBox.unselectAll()
+            if let idx = customInstrumentRows.firstIndex(of: .file(defID: defID, path: path)),
                 let row = customInstrumentsList.getRowAt(index: idx)
             {
                 customInstrumentsList.select(row: row)
@@ -1822,6 +2097,16 @@ final class MainWindow {
         }
         updateResumeButtonVisibility()
         renderDetail()
+        focusEditorIfNeeded(for: newValue)
+    }
+
+    private func focusEditorIfNeeded(for selection: SidebarSelection) {
+        switch selection {
+        case .customInstrumentDef, .customInstrumentFile:
+            sharedCustomInstrumentEditor.focus()
+        default:
+            break
+        }
     }
 
     // MARK: - Engine bindings
@@ -1882,6 +2167,9 @@ final class MainWindow {
                 let i = arr.firstIndex(where: { $0.id == instrument.id })
             {
                 instrumentsBySession[instrument.sessionID]![i] = instrument
+            }
+            if let warningHost = instrumentRowWarningHosts[instrument.id] {
+                populateIncompatibilityWarning(host: warningHost, reason: instrumentIncompatibilityReason(for: instrument))
             }
             if let detail = currentInstrumentDetail, detail.instrumentID == instrument.id {
                 detail.update(instrument)

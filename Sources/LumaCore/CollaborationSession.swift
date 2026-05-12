@@ -299,7 +299,7 @@ public final class CollaborationSession {
     public var onCustomInstrumentOpReceived: ((CustomInstrumentOp) -> Void)?
     public var onMissionOpReceived: ((MissionOp) -> Void)?
     public var onMissionSnapshot: ((MissionSnapshot) -> Void)?
-    public var onCustomInstrumentSnapshot: (([CustomInstrumentDef]) -> Void)?
+    public var onCustomInstrumentSnapshot: (([CustomInstrumentBundle]) -> Void)?
     public var onWidgetStatesSnapshot: (([WidgetStateSnapshot]) -> Void)?
     public var onSessionOpRejected: ((UUID, String) -> Void)?
     public var onChatMessageReceived: ((ChatMessage) -> Void)?
@@ -1314,8 +1314,8 @@ public final class CollaborationSession {
         onSessionsSnapshot?(sessions)
 
         let customDicts = (payload["custom_instruments"] as? [JSONObject]) ?? []
-        let customDefs = customDicts.compactMap(CustomInstrumentDef.fromJSON)
-        onCustomInstrumentSnapshot?(customDefs)
+        let customBundles = customDicts.compactMap(CustomInstrumentBundle.fromJSON)
+        onCustomInstrumentSnapshot?(customBundles)
 
         let widgetStateDicts = (payload["widget_states"] as? [JSONObject]) ?? []
         let widgetSnapshots = widgetStateDicts.compactMap(WidgetStateSnapshot.fromWireJSON)

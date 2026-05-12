@@ -47,6 +47,12 @@ public enum MissionTools {
         registerUpdateCustomInstrument(in: catalog, engine: engine)
         registerDeleteCustomInstrument(in: catalog, engine: engine)
         registerAttachCustomInstrument(in: catalog, engine: engine)
+        registerListCustomInstrumentFiles(in: catalog, engine: engine)
+        registerReadCustomInstrumentFile(in: catalog, engine: engine)
+        registerWriteCustomInstrumentFile(in: catalog, engine: engine)
+        registerDeleteCustomInstrumentFile(in: catalog, engine: engine)
+        registerRenameCustomInstrumentFile(in: catalog, engine: engine)
+        registerSetCustomInstrumentEntrypoint(in: catalog, engine: engine)
         registerReadTracerHandlerTemplate(in: catalog)
         registerReadCustomInstrumentTemplate(in: catalog)
         registerReadCustomInstrumentTypings(in: catalog, engine: engine)
@@ -1301,7 +1307,7 @@ public enum MissionTools {
     private static func registerReadCustomInstrument(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "read_custom_instrument",
-            description: "Read a custom instrument's full definition, including TypeScript source and features. Use only when you intend to read or edit the source.",
+            description: "Read a custom instrument's metadata: entrypoint, features, widgets, and the list of file paths. File contents are NOT included — call read_custom_instrument_file for each path you need.",
             inputSchemaJSON: """
                 {"type":"object","properties":{"def_id":{"type":"string"}},"required":["def_id"],"additionalProperties":false}
                 """,
@@ -1309,23 +1315,19 @@ public enum MissionTools {
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
-            guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id", code: .invalidInput)
+            await withResolvedCustomInstrumentDef(invocation.args, engine: engine) { engine, defID, def in
+                let files = engine.customInstruments.files(forDefID: defID)
+                return makeResult(jsonObject: customInstrumentJSON(def: def, files: files), summary: "Custom instrument \(def.name)")
             }
-            guard let def = engine.customInstruments.def(withId: defID) else {
-                return errorResult("no custom instrument with id \(defID)", code: .notFound)
-            }
-            return makeResult(jsonObject: customInstrumentJSON(def: def), summary: "Custom instrument \(def.name)")
         }
     }
 
     private static func registerCreateCustomInstrument(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "create_custom_instrument",
-            description: "Create a custom instrument definition. The definition lives in the project and can be attached to any number of sessions via attach_custom_instrument. 'source' is the full TypeScript module. Optional 'icon' is one of the catalog ids (e.g. wand-stars, bug, scope, network). Optional 'features' declares boolean toggles surfaced on config.features in the source. Optional 'widgets' declares live UI elements: graphs you push points to via ctx.widget(id).push({series,x,y}), or lists you maintain via upsertItem/removeItem with per-item action buttons routed back to the source's onAction handler.",
+            description: "Create a custom instrument definition seeded with a `main.ts` file containing the canonical skeleton (the entrypoint). Use write_custom_instrument_file to replace its contents, and add helper files as needed. Optional 'icon' is a catalog id (e.g. wand-stars, bug, scope, network). Optional 'features' declares config toggles; 'widgets' declares live UI elements.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"name":{"type":"string"},"icon":{"type":"string","description":"Catalog id like wand-stars, bug, scope, network — see list_custom_instrument_icons"},"compatibility":\(compatibilitySchemaJSON),"source":{"type":"string"},"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["name","source"],"additionalProperties":false}
+                {"type":"object","properties":{"name":{"type":"string"},"icon":{"type":"string","description":"Catalog id like wand-stars, bug, scope, network — see list_custom_instrument_icons"},"compatibility":\(compatibilitySchemaJSON),"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["name"],"additionalProperties":false}
                 """,
             isObserve: false,
             requiresSession: false
@@ -1335,62 +1337,185 @@ public enum MissionTools {
             guard let name = invocation.args["name"] as? String, !name.isEmpty else {
                 return errorResult("missing name", code: .invalidInput)
             }
-            guard let source = invocation.args["source"] as? String, !source.isEmpty else {
-                return errorResult("missing source", code: .invalidInput)
-            }
             let icon = parseIconArg(invocation.args["icon"] as? String)
             let compatibility = parseCompatibilityArg(invocation.args["compatibility"])
             let features = parseFeaturesArg(invocation.args["features"])
             let widgets = parseWidgetsArg(invocation.args["widgets"])
-            var def = engine.createCustomInstrument(name: name, icon: icon, source: source)
+            var def = engine.createCustomInstrument(name: name, icon: icon)
             if !compatibility.isUniversal || !features.isEmpty || !widgets.isEmpty {
                 def.compatibility = compatibility
                 def.features = features
                 def.widgets = widgets
                 await engine.updateCustomInstrument(def)
             }
-            return makeResult(jsonObject: ["def_id": def.id.uuidString, "name": def.name], summary: "Created custom instrument \(def.name)")
+            return makeResult(
+                jsonObject: ["def_id": def.id.uuidString, "name": def.name, "entrypoint": def.entrypoint],
+                summary: "Created custom instrument \(def.name)"
+            )
         }
     }
 
     private static func registerUpdateCustomInstrument(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "update_custom_instrument",
-            description: "Update a custom instrument's name, icon, source, features, or widgets. Only fields you pass change. Passing 'features' or 'widgets' replaces the entire list — pass an empty array to clear.",
+            description: "Update a custom instrument's metadata: name, icon, compatibility, features, or widgets. Only fields you pass change. Passing 'features' or 'widgets' replaces the entire list — pass an empty array to clear. File contents are managed via write_custom_instrument_file; the entrypoint via set_custom_instrument_entrypoint.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"def_id":{"type":"string"},"name":{"type":"string"},"icon":{"type":"string"},"compatibility":\(compatibilitySchemaJSON),"source":{"type":"string"},"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["def_id"],"additionalProperties":false}
+                {"type":"object","properties":{"def_id":{"type":"string"},"name":{"type":"string"},"icon":{"type":"string"},"compatibility":\(compatibilitySchemaJSON),"features":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"enabled_by_default":{"type":"boolean","default":true}},"required":["id","name"],"additionalProperties":false}},"widgets":\(widgetsSchemaJSON)},"required":["def_id"],"additionalProperties":false}
                 """,
             isObserve: false,
             requiresSession: false
         )
         catalog.register(spec: spec) { [weak engine] invocation in
-            guard let engine else { return errorResult("engine unavailable", code: .unavailable) }
-            guard let defID = (invocation.args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
-                return errorResult("missing or invalid def_id", code: .invalidInput)
+            await withResolvedCustomInstrumentDef(invocation.args, engine: engine) { engine, _, defConst in
+                var def = defConst
+                if let name = invocation.args["name"] as? String, !name.isEmpty {
+                    def.name = name
+                }
+                if let iconID = invocation.args["icon"] as? String {
+                    def.icon = parseIconArg(iconID)
+                }
+                if invocation.args["compatibility"] != nil {
+                    def.compatibility = parseCompatibilityArg(invocation.args["compatibility"])
+                }
+                if invocation.args["features"] != nil {
+                    def.features = parseFeaturesArg(invocation.args["features"])
+                }
+                if invocation.args["widgets"] != nil {
+                    def.widgets = parseWidgetsArg(invocation.args["widgets"])
+                }
+                await engine.updateCustomInstrument(def)
+                return makeResult(jsonObject: ["def_id": def.id.uuidString, "name": def.name], summary: "Updated custom instrument \(def.name)")
             }
-            guard var def = engine.customInstruments.def(withId: defID) else {
-                return errorResult("no custom instrument with id \(defID)", code: .notFound)
+        }
+    }
+
+    private static func registerListCustomInstrumentFiles(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "list_custom_instrument_files",
+            description: "List the file paths inside a custom instrument's source tree. Contents are not included; call read_custom_instrument_file for each path you need.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"def_id":{"type":"string"}},"required":["def_id"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            await withResolvedCustomInstrumentDef(invocation.args, engine: engine) { engine, defID, def in
+                let paths = engine.customInstruments.files(forDefID: defID).map(\.path).sorted()
+                return makeResult(
+                    jsonObject: ["def_id": defID.uuidString, "entrypoint": def.entrypoint, "paths": paths],
+                    summary: "\(paths.count) file\(paths.count == 1 ? "" : "s") in \(def.name)"
+                )
             }
-            if let name = invocation.args["name"] as? String, !name.isEmpty {
-                def.name = name
+        }
+    }
+
+    private static func registerReadCustomInstrumentFile(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "read_custom_instrument_file",
+            description: "Read one file's TypeScript source from a custom instrument.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"def_id":{"type":"string"},"path":{"type":"string"}},"required":["def_id","path"],"additionalProperties":false}
+                """,
+            isObserve: true,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            await withResolvedCustomInstrumentFile(invocation.args, engine: engine) { _, defID, _, file in
+                makeResult(
+                    jsonObject: ["def_id": defID.uuidString, "path": file.path, "content": file.content],
+                    summary: "Read \(file.path)"
+                )
             }
-            if let iconID = invocation.args["icon"] as? String {
-                def.icon = parseIconArg(iconID)
+        }
+    }
+
+    private static func registerWriteCustomInstrumentFile(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "write_custom_instrument_file",
+            description: "Create or replace the contents of one file in a custom instrument. Path is relative inside the instrument's source tree (subdirectories allowed). Running instances are recompiled.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"def_id":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"}},"required":["def_id","path","content"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            await withResolvedCustomInstrumentDef(invocation.args, engine: engine) { engine, defID, _ in
+                guard let path = invocation.args["path"] as? String, !path.isEmpty else {
+                    return errorResult("missing path", code: .invalidInput)
+                }
+                guard let content = invocation.args["content"] as? String else {
+                    return errorResult("missing content", code: .invalidInput)
+                }
+                await engine.writeCustomInstrumentFile(defID: defID, path: path, content: content)
+                return makeResult(jsonObject: ["def_id": defID.uuidString, "path": path], summary: "Wrote \(path)")
             }
-            if invocation.args["compatibility"] != nil {
-                def.compatibility = parseCompatibilityArg(invocation.args["compatibility"])
+        }
+    }
+
+    private static func registerDeleteCustomInstrumentFile(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "delete_custom_instrument_file",
+            description: "Delete one file from a custom instrument. Refuses to delete the entrypoint — call set_custom_instrument_entrypoint first to point at a different file.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"def_id":{"type":"string"},"path":{"type":"string"}},"required":["def_id","path"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            await withResolvedCustomInstrumentFile(invocation.args, engine: engine) { engine, defID, def, file in
+                if def.entrypoint == file.path {
+                    return errorResult("cannot delete entrypoint '\(file.path)' — re-point with set_custom_instrument_entrypoint first", code: .invalidInput)
+                }
+                await engine.deleteCustomInstrumentFile(defID: defID, path: file.path)
+                return makeResult(jsonObject: ["def_id": defID.uuidString, "path": file.path], summary: "Deleted \(file.path)")
             }
-            if let source = invocation.args["source"] as? String, !source.isEmpty {
-                def.source = source
+        }
+    }
+
+    private static func registerRenameCustomInstrumentFile(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "rename_custom_instrument_file",
+            description: "Rename a file inside a custom instrument. If the renamed file was the entrypoint, the entrypoint is updated automatically.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"def_id":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"}},"required":["def_id","from","to"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            await withResolvedCustomInstrumentDef(invocation.args, engine: engine) { engine, defID, _ in
+                guard let from = invocation.args["from"] as? String, !from.isEmpty,
+                    let to = invocation.args["to"] as? String, !to.isEmpty
+                else {
+                    return errorResult("missing from/to", code: .invalidInput)
+                }
+                guard engine.customInstruments.file(defID: defID, path: from) != nil else {
+                    return errorResult("no file '\(from)'", code: .notFound)
+                }
+                await engine.renameCustomInstrumentFile(defID: defID, from: from, to: to)
+                return makeResult(jsonObject: ["def_id": defID.uuidString, "from": from, "to": to], summary: "Renamed \(from) → \(to)")
             }
-            if invocation.args["features"] != nil {
-                def.features = parseFeaturesArg(invocation.args["features"])
+        }
+    }
+
+    private static func registerSetCustomInstrumentEntrypoint(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "set_custom_instrument_entrypoint",
+            description: "Mark which file is the entrypoint the agent loads first. The path must exist among the instrument's files.",
+            inputSchemaJSON: """
+                {"type":"object","properties":{"def_id":{"type":"string"},"path":{"type":"string"}},"required":["def_id","path"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: false
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            await withResolvedCustomInstrumentFile(invocation.args, engine: engine) { engine, defID, _, file in
+                await engine.setCustomInstrumentEntrypoint(defID: defID, path: file.path)
+                return makeResult(jsonObject: ["def_id": defID.uuidString, "entrypoint": file.path], summary: "Entrypoint set to \(file.path)")
             }
-            if invocation.args["widgets"] != nil {
-                def.widgets = parseWidgetsArg(invocation.args["widgets"])
-            }
-            await engine.updateCustomInstrument(def)
-            return makeResult(jsonObject: ["def_id": def.id.uuidString, "name": def.name], summary: "Updated custom instrument \(def.name)")
         }
     }
 
@@ -1479,7 +1604,7 @@ public enum MissionTools {
         )
         catalog.register(spec: spec) { _ in
             return makeResult(
-                jsonObject: ["template": CustomInstrumentDef.exampleSource],
+                jsonObject: ["template": CustomInstrumentDef.defaultEntrypointSource],
                 summary: "Custom instrument source template"
             )
         }
@@ -2086,7 +2211,7 @@ public enum MissionTools {
         return InstrumentWidget.TableConfig(columns: columns, actions: actions, maxRows: max(1, maxRows))
     }
 
-    private static func customInstrumentJSON(def: CustomInstrumentDef) -> [String: Any] {
+    private static func customInstrumentJSON(def: CustomInstrumentDef, files: [CustomInstrumentFile]) -> [String: Any] {
         let features: [[String: Any]] = def.features.map { feature in
             [
                 "id": feature.id,
@@ -2099,10 +2224,42 @@ public enum MissionTools {
             "id": def.id.uuidString,
             "name": def.name,
             "icon": describeIcon(def.icon),
-            "source": def.source,
+            "entrypoint": def.entrypoint,
+            "paths": files.map(\.path).sorted(),
             "features": features,
             "widgets": widgets,
         ]
+    }
+
+    private static func withResolvedCustomInstrumentDef(
+        _ args: [String: Any],
+        engine engineMaybe: Engine?,
+        body: @MainActor (Engine, UUID, CustomInstrumentDef) async -> ActionResult
+    ) async -> ActionResult {
+        guard let engine = engineMaybe else { return errorResult("engine unavailable", code: .unavailable) }
+        guard let defID = (args["def_id"] as? String).flatMap(UUID.init(uuidString:)) else {
+            return errorResult("missing or invalid def_id", code: .invalidInput)
+        }
+        guard let def = engine.customInstruments.def(withId: defID) else {
+            return errorResult("no custom instrument with id \(defID)", code: .notFound)
+        }
+        return await body(engine, defID, def)
+    }
+
+    private static func withResolvedCustomInstrumentFile(
+        _ args: [String: Any],
+        engine engineMaybe: Engine?,
+        body: @MainActor (Engine, UUID, CustomInstrumentDef, CustomInstrumentFile) async -> ActionResult
+    ) async -> ActionResult {
+        await withResolvedCustomInstrumentDef(args, engine: engineMaybe) { engine, defID, def in
+            guard let path = args["path"] as? String, !path.isEmpty else {
+                return errorResult("missing path", code: .invalidInput)
+            }
+            guard let file = engine.customInstruments.file(defID: defID, path: path) else {
+                return errorResult("no file '\(path)' in custom instrument \(defID)", code: .notFound)
+            }
+            return await body(engine, defID, def, file)
+        }
     }
 
     private static func customInstrumentWidgetJSON(_ widget: InstrumentWidget) -> [String: Any] {

@@ -14,6 +14,13 @@ struct SidebarView: View {
     var customInstrumentDefs: [LumaCore.CustomInstrumentDef] { engine.customInstruments.defs }
     var missions: [LumaCore.Mission] { engine.missions }
 
+    private func auxiliaryFilesForDef(_ def: LumaCore.CustomInstrumentDef) -> [LumaCore.CustomInstrumentFile] {
+        CustomInstrumentFile.sortedByPath(
+            engine.customInstruments.files(forDefID: def.id).filter { $0.path != def.entrypoint },
+            entrypoint: def.entrypoint
+        )
+    }
+
     var body: some View {
         List(selection: $selection) {
             Section {
@@ -34,46 +41,50 @@ struct SidebarView: View {
                     let insights = engine.insightsBySession[session.id] ?? []
                     let traces = engine.tracesBySession[session.id] ?? []
 
-                    SidebarSessionHeaderRow(
-                        session: session,
-                        node: node,
-                        engine: engine,
-                        selection: $selection
-                    )
-                    .tag(SidebarItemID.session(session.id))
+                    DisclosureGroup(isExpanded: expansionBinding(forSessionID: session.id)) {
+                        SidebarSessionREPLRow(sessionID: session.id)
+                            .tag(SidebarItemID.repl(session.id))
 
-                    SidebarSessionREPLRow(sessionID: session.id)
-                        .tag(SidebarItemID.repl(session.id))
+                        ForEach(instruments) { instance in
+                            SidebarInstrumentRow(
+                                session: session,
+                                node: node,
+                                instance: instance,
+                                engine: engine,
+                                selection: $selection
+                            )
+                            .tag(SidebarItemID.instrument(session.id, instance.id))
 
-                    ForEach(instruments) { instance in
-                        SidebarInstrumentRow(
+                            tracerHookChildren(sessionID: session.id, instance: instance)
+                        }
+
+                        ForEach(insights.sorted(by: { $0.createdAt < $1.createdAt })) { insight in
+                            SidebarInsightRow(
+                                session: session,
+                                insight: insight,
+                                engine: engine,
+                                selection: $selection
+                            )
+                            .tag(SidebarItemID.insight(session.id, insight.id))
+                        }
+
+                        ForEach(traces.sorted(by: { $0.startedAt < $1.startedAt })) { trace in
+                            SidebarITraceRow(
+                                session: session,
+                                trace: trace,
+                                engine: engine,
+                                selection: $selection
+                            )
+                            .tag(SidebarItemID.itrace(session.id, trace.id))
+                        }
+                    } label: {
+                        SidebarSessionHeaderRow(
                             session: session,
                             node: node,
-                            instance: instance,
                             engine: engine,
                             selection: $selection
                         )
-                        .tag(SidebarItemID.instrument(session.id, instance.id))
-                    }
-
-                    ForEach(insights.sorted(by: { $0.createdAt < $1.createdAt })) { insight in
-                        SidebarInsightRow(
-                            session: session,
-                            insight: insight,
-                            engine: engine,
-                            selection: $selection
-                        )
-                        .tag(SidebarItemID.insight(session.id, insight.id))
-                    }
-
-                    ForEach(traces.sorted(by: { $0.startedAt < $1.startedAt })) { trace in
-                        SidebarITraceRow(
-                            session: session,
-                            trace: trace,
-                            engine: engine,
-                            selection: $selection
-                        )
-                        .tag(SidebarItemID.itrace(session.id, trace.id))
+                        .tag(SidebarItemID.session(session.id))
                     }
                 }
 
@@ -82,12 +93,34 @@ struct SidebarView: View {
             if !customInstrumentDefs.isEmpty {
                 Section("Custom Instruments") {
                     ForEach(customInstrumentDefs) { def in
-                        SidebarCustomInstrumentDefRow(
-                            def: def,
-                            engine: engine,
-                            selection: $selection
-                        )
-                        .tag(SidebarItemID.customInstrumentDef(def.id))
+                        let auxiliaryFiles = auxiliaryFilesForDef(def)
+                        if auxiliaryFiles.isEmpty {
+                            SidebarCustomInstrumentDefRow(
+                                def: def,
+                                engine: engine,
+                                selection: $selection
+                            )
+                            .tag(SidebarItemID.customInstrumentFile(def.id, def.entrypoint))
+                        } else {
+                            DisclosureGroup(isExpanded: expansionBinding(forCustomInstrumentDefID: def.id)) {
+                                ForEach(auxiliaryFiles, id: \.path) { file in
+                                    SidebarCustomInstrumentFileRow(
+                                        def: def,
+                                        file: file,
+                                        engine: engine,
+                                        selection: $selection
+                                    )
+                                    .tag(SidebarItemID.customInstrumentFile(def.id, file.path))
+                                }
+                            } label: {
+                                SidebarCustomInstrumentDefRow(
+                                    def: def,
+                                    engine: engine,
+                                    selection: $selection
+                                )
+                                .tag(SidebarItemID.customInstrumentFile(def.id, def.entrypoint))
+                            }
+                        }
                     }
                 }
             }
@@ -103,7 +136,44 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
     }
+
+    private func expansionBinding(forSessionID sessionID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { engine.sidebarExpansion(forSessionID: sessionID) == .expanded },
+            set: { engine.setSidebarExpansion(sessionID: sessionID, $0 ? .expanded : .collapsed) }
+        )
+    }
+
+    private func expansionBinding(forCustomInstrumentDefID defID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { engine.sidebarExpansion(forCustomInstrumentDefID: defID) == .expanded },
+            set: { engine.setSidebarExpansion(customInstrumentDefID: defID, $0 ? .expanded : .collapsed) }
+        )
+    }
+
+    @ViewBuilder
+    private func tracerHookChildren(sessionID: UUID, instance: LumaCore.InstrumentInstance) -> some View {
+        if instance.kind == .tracer,
+            let config = try? TracerConfig.decode(from: instance.configJSON)
+        {
+            let ordered = config.hooksByMostRecentlyEdited()
+            ForEach(ordered.prefix(sidebarTracerHookInlineLimit), id: \.id) { hook in
+                SidebarTracerHookRow(hook: hook)
+                    .tag(SidebarItemID.instrumentComponent(sessionID, instance.id, hook.id, hook.id))
+            }
+            if ordered.count > sidebarTracerHookInlineLimit {
+                SidebarTracerBrowseAllRow(
+                    sessionID: sessionID,
+                    instance: instance,
+                    hooks: ordered,
+                    selection: $selection
+                )
+            }
+        }
+    }
 }
+
+private let sidebarTracerHookInlineLimit = 5
 
 
 private struct SidebarNotebookRow: View {
@@ -576,6 +646,65 @@ private struct SidebarInstrumentRow: View {
     }
 }
 
+private struct SidebarTracerHookRow: View {
+    let hook: TracerConfig.Hook
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 5))
+                .frame(width: subrowIconWidth, alignment: .center)
+                .foregroundStyle(.secondary)
+            Text(hook.displayName)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+        }
+        .font(.callout)
+        .contentShape(Rectangle())
+        .padding(.leading, 40)
+        .opacity(hook.state == .enabled ? 1 : 0.5)
+        .help(hook.addressAnchor.displayString)
+    }
+}
+
+private struct SidebarTracerBrowseAllRow: View {
+    let sessionID: UUID
+    let instance: LumaCore.InstrumentInstance
+    let hooks: [TracerConfig.Hook]
+    @Binding var selection: SidebarItemID?
+
+    @State private var isShowingBrowser = false
+
+    var body: some View {
+        Button {
+            isShowingBrowser = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "ellipsis.circle")
+                    .frame(width: subrowIconWidth, alignment: .center)
+                    .foregroundStyle(.secondary)
+                Text("Browse all \(hooks.count)\u{2026}")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.callout)
+        .contentShape(Rectangle())
+        .padding(.leading, 40)
+        .popover(isPresented: $isShowingBrowser, arrowEdge: .trailing) {
+            TracerHookBrowserPopover(
+                sessionID: sessionID,
+                instanceID: instance.id,
+                hooks: hooks,
+                selection: $selection,
+                onDismiss: { isShowingBrowser = false }
+            )
+        }
+    }
+}
+
 private struct SidebarInsightRow: View {
     let session: LumaCore.ProcessSession
     let insight: LumaCore.AddressInsight
@@ -671,6 +800,8 @@ struct SidebarCustomInstrumentDefRow: View {
     @State private var isShowingFeatures = false
     @State private var isShowingWidgets = false
     @State private var isShowingDeleteConfirm = false
+    @State private var addFilePrompt = AddFilePromptState()
+    @State private var renameEntrypointPrompt = RenamePromptState()
     @State private var exportBundle: HookPackExportBundle?
     @State private var exportErrorMessage: String?
 
@@ -704,6 +835,18 @@ struct SidebarCustomInstrumentDefRow: View {
             } label: {
                 Label("Widgets\u{2026}", systemImage: "chart.xyaxis.line")
             }
+            Divider()
+            Button {
+                addFilePrompt.present()
+            } label: {
+                Label("Add File\u{2026}", systemImage: "plus")
+            }
+            Button {
+                renameEntrypointPrompt.present(current: def.entrypoint)
+            } label: {
+                Label("Rename Entrypoint File\u{2026}", systemImage: "pencil")
+            }
+            Divider()
             Button {
                 presentExportPicker()
             } label: {
@@ -714,6 +857,24 @@ struct SidebarCustomInstrumentDefRow: View {
             } label: {
                 Label("Delete Custom Instrument", systemImage: "trash")
             }
+        }
+        .alert("Add File", isPresented: $addFilePrompt.isPresented) {
+            TextField("path/to/file.ts", text: $addFilePrompt.draft)
+                .disableAutocorrection(true)
+            Button("Add") { commitAddFile() }
+                .disabled(!addFilePrompt.canCommit)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Relative path inside this instrument. Subdirectories allowed.")
+        }
+        .alert("Rename Entrypoint File", isPresented: $renameEntrypointPrompt.isPresented) {
+            TextField("path/to/file.ts", text: $renameEntrypointPrompt.draft)
+                .disableAutocorrection(true)
+            Button("Rename") { commitRenameEntrypoint() }
+                .disabled(!renameEntrypointPrompt.canCommit(originalPath: def.entrypoint))
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Renames the entrypoint file and updates the entrypoint automatically.")
         }
         .popover(isPresented: $isShowingRename, arrowEdge: .trailing) {
             CustomInstrumentRenamePopover(
@@ -745,9 +906,10 @@ struct SidebarCustomInstrumentDefRow: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
+                let defID = def.id
                 Task { @MainActor in
-                    await engine.deleteCustomInstrument(def.id)
-                    if selection == .customInstrumentDef(def.id) {
+                    await engine.deleteCustomInstrument(defID)
+                    if selection?.belongsTo(defID: defID) ?? false {
                         selection = .notebook
                     }
                 }
@@ -796,6 +958,187 @@ struct SidebarCustomInstrumentDefRow: View {
             exportErrorMessage = error.localizedDescription
         }
     }
+
+    private func commitAddFile() {
+        let trimmed = addFilePrompt.normalizedPath
+        guard !trimmed.isEmpty else { return }
+        let defID = def.id
+        Task { @MainActor in
+            await engine.writeCustomInstrumentFile(defID: defID, path: trimmed, content: "")
+            selection = .customInstrumentFile(defID, trimmed)
+        }
+        addFilePrompt.reset()
+    }
+
+    private func commitRenameEntrypoint() {
+        let from = def.entrypoint
+        let to = renameEntrypointPrompt.normalizedPath
+        guard !to.isEmpty, to != from else { return }
+        let defID = def.id
+        Task { @MainActor in
+            await engine.renameCustomInstrumentFile(defID: defID, from: from, to: to)
+            if selection == .customInstrumentFile(defID, from) {
+                selection = .customInstrumentFile(defID, to)
+            }
+        }
+        renameEntrypointPrompt.reset()
+    }
+}
+
+private extension SidebarItemID {
+    func belongsTo(defID: UUID) -> Bool {
+        switch self {
+        case .customInstrumentDef(let id) where id == defID:
+            return true
+        case .customInstrumentFile(let id, _) where id == defID:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private struct AddFilePromptState {
+    var isPresented = false
+    var draft = ""
+
+    var canCommit: Bool { !normalizedPath.isEmpty }
+    var normalizedPath: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    mutating func present() {
+        draft = ""
+        isPresented = true
+    }
+
+    mutating func reset() {
+        draft = ""
+        isPresented = false
+    }
+}
+
+private struct SidebarCustomInstrumentFileRow: View {
+    let def: LumaCore.CustomInstrumentDef
+    let file: LumaCore.CustomInstrumentFile
+    let engine: Engine
+    @Binding var selection: SidebarItemID?
+
+    @State private var renamePrompt = RenamePromptState()
+    @State private var isShowingDeleteConfirm = false
+
+    private var isEntrypoint: Bool { file.path == def.entrypoint }
+    private var canDelete: Bool { !isEntrypoint }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text")
+                .frame(width: subrowIconWidth, alignment: .center)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(file.path)
+                .fontWeight(isEntrypoint ? .semibold : .regular)
+            Spacer()
+        }
+        .font(.callout)
+        .contentShape(Rectangle())
+        .padding(.leading, 20)
+        .accessibilityIdentifier("sidebar.customInstrumentFile.\(def.id.uuidString).\(file.path)")
+        .contextMenu {
+            if !isEntrypoint {
+                Button {
+                    setAsEntrypoint()
+                } label: {
+                    Label("Set as Entrypoint", systemImage: "play.circle")
+                }
+                Divider()
+            }
+            Button {
+                renamePrompt.present(current: file.path)
+            } label: {
+                Label("Rename\u{2026}", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                isShowingDeleteConfirm = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(!canDelete)
+        }
+        .alert("Rename File", isPresented: $renamePrompt.isPresented) {
+            TextField("path/to/file.ts", text: $renamePrompt.draft)
+                .disableAutocorrection(true)
+            Button("Rename") { commitRename() }
+                .disabled(!renamePrompt.canCommit(originalPath: file.path))
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(isEntrypoint ? "Renaming the entrypoint updates the entrypoint automatically." : "Relative path inside this instrument.")
+        }
+        .confirmationDialog(
+            "Delete \"\(file.path)\"?",
+            isPresented: $isShowingDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) { deleteFile() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes this file from the instrument.")
+        }
+    }
+
+    private func setAsEntrypoint() {
+        let defID = def.id
+        let path = file.path
+        Task { @MainActor in
+            await engine.setCustomInstrumentEntrypoint(defID: defID, path: path)
+        }
+    }
+
+    private func commitRename() {
+        let from = file.path
+        let to = renamePrompt.normalizedPath
+        guard !to.isEmpty, to != from else { return }
+        let defID = def.id
+        Task { @MainActor in
+            await engine.renameCustomInstrumentFile(defID: defID, from: from, to: to)
+            if selection == .customInstrumentFile(defID, from) {
+                selection = .customInstrumentFile(defID, to)
+            }
+        }
+        renamePrompt.reset()
+    }
+
+    private func deleteFile() {
+        let defID = def.id
+        let path = file.path
+        let entrypoint = def.entrypoint
+        Task { @MainActor in
+            await engine.deleteCustomInstrumentFile(defID: defID, path: path)
+            if selection == .customInstrumentFile(defID, path) {
+                selection = .customInstrumentFile(defID, entrypoint)
+            }
+        }
+    }
+}
+
+private struct RenamePromptState {
+    var isPresented = false
+    var draft = ""
+
+    var normalizedPath: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    func canCommit(originalPath: String) -> Bool {
+        let trimmed = normalizedPath
+        return !trimmed.isEmpty && trimmed != originalPath
+    }
+
+    mutating func present(current: String) {
+        draft = current
+        isPresented = true
+    }
+
+    mutating func reset() {
+        draft = ""
+        isPresented = false
+    }
 }
 
 struct HookPackExportBundle: Identifiable {
@@ -818,14 +1161,37 @@ struct HookPackExportDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        var children: [String: FileWrapper] = [
-            "manifest.json": FileWrapper(regularFileWithContents: bundle.manifestData),
-            bundle.entryFilename: FileWrapper(regularFileWithContents: Data(bundle.entrySource.utf8)),
-        ]
-        if let icon = bundle.icon {
-            children[icon.filename] = FileWrapper(regularFileWithContents: icon.data)
+        let root = FileWrapper(directoryWithFileWrappers: [
+            "manifest.json": FileWrapper(regularFileWithContents: bundle.manifestData)
+        ])
+        for file in bundle.files {
+            addFileWrapper(at: file.path, data: file.content, to: root)
         }
-        return FileWrapper(directoryWithFileWrappers: children)
+        if let icon = bundle.icon {
+            let iconWrapper = FileWrapper(regularFileWithContents: icon.data)
+            iconWrapper.preferredFilename = icon.filename
+            root.addFileWrapper(iconWrapper)
+        }
+        return root
+    }
+
+    private func addFileWrapper(at path: String, data: Data, to root: FileWrapper) {
+        var components = path.split(separator: "/").map(String.init)
+        guard let leafName = components.popLast() else { return }
+        var dir = root
+        for segment in components {
+            if let existing = dir.fileWrappers?[segment], existing.isDirectory {
+                dir = existing
+            } else {
+                let child = FileWrapper(directoryWithFileWrappers: [:])
+                child.preferredFilename = segment
+                dir.addFileWrapper(child)
+                dir = child
+            }
+        }
+        let leaf = FileWrapper(regularFileWithContents: data)
+        leaf.preferredFilename = leafName
+        dir.addFileWrapper(leaf)
     }
 
     static func suggestedFilename(for name: String) -> String {

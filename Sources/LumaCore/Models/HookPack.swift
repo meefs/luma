@@ -11,8 +11,8 @@ public struct HookPack: Sendable {
         self.folderURL = folderURL
     }
 
-    public var entryURL: URL {
-        folderURL.appendingPathComponent(manifest.entry)
+    public var entrypointURL: URL {
+        folderURL.appendingPathComponent(manifest.entrypoint)
     }
 
     public var resolvedIcon: InstrumentIcon {
