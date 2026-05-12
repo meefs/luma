@@ -29,8 +29,14 @@ final class AddInstrumentDialog {
     private var hookPackFeatureEditors: [FeatureValueEditor] = []
     private let sharedTracerMonaco: MonacoEditor
     private let sharedCodeShareMonaco: MonacoEditor
-    private var newCustomIndex: Int = 0
-    private var importHookPackIndex: Int = 0
+    private var rowKinds: [RowKind] = []
+
+    private enum RowKind {
+        case descriptor(Int)
+        case header
+        case newCustom
+        case importHookPack
+    }
 
     init(
         parent: Gtk.Window,
@@ -102,87 +108,69 @@ final class AddInstrumentDialog {
         dialog.set(child: toolbarView)
         dialog.set(defaultWidget: addButton)
 
-        for descriptor in descriptors {
-            let row = ListBoxRow()
-            let alreadyAdded = disabledDescriptorIDs.contains(descriptor.id)
-            let incompatibilityReason = incompatibilityReasons[descriptor.id]
-            let isInert = alreadyAdded || incompatibilityReason != nil
-            let rowBox = Box(orientation: .vertical, spacing: 2)
-            rowBox.marginStart = 12
-            rowBox.marginEnd = 12
-            rowBox.marginTop = 8
-            rowBox.marginBottom = 8
-            let label = Label(str: descriptor.displayName)
-            label.halign = .start
-            rowBox.append(child: label)
-            if alreadyAdded {
-                rowBox.append(child: hintLabel("Already added"))
-            } else if let reason = incompatibilityReason {
-                rowBox.append(child: hintLabel(reason))
+        var sawCustom = false
+        for (descriptorIndex, descriptor) in descriptors.enumerated() {
+            if descriptor.kind == .custom, !sawCustom {
+                listBox.append(child: makeCustomInstrumentsHeaderRow())
+                rowKinds.append(.header)
+                sawCustom = true
             }
-            row.set(child: rowBox)
-            if isInert {
-                row.sensitive = false
-                row.selectable = false
-            }
+            let row = makeDescriptorRow(
+                descriptor: descriptor,
+                alreadyAdded: disabledDescriptorIDs.contains(descriptor.id),
+                incompatibilityReason: incompatibilityReasons[descriptor.id]
+            )
             listBox.append(child: row)
+            rowKinds.append(.descriptor(descriptorIndex))
         }
 
-        let newCustomRow = ListBoxRow()
-        let newCustomBox = Box(orientation: .vertical, spacing: 2)
-        newCustomBox.marginStart = 12
-        newCustomBox.marginEnd = 12
-        newCustomBox.marginTop = 8
-        newCustomBox.marginBottom = 8
-        let newCustomLabel = Label(str: "+ New Custom Instrument\u{2026}")
-        newCustomLabel.halign = .start
-        newCustomBox.append(child: newCustomLabel)
-        newCustomRow.set(child: newCustomBox)
-        listBox.append(child: newCustomRow)
-        newCustomIndex = descriptors.count
+        if !sawCustom {
+            listBox.append(child: makeCustomInstrumentsHeaderRow())
+            rowKinds.append(.header)
+        }
 
-        let importHookPackRow = ListBoxRow()
-        let importHookPackBox = Box(orientation: .vertical, spacing: 2)
-        importHookPackBox.marginStart = 12
-        importHookPackBox.marginEnd = 12
-        importHookPackBox.marginTop = 8
-        importHookPackBox.marginBottom = 8
-        let importHookPackLabel = Label(str: "↓ Import from Hookpack\u{2026}")
-        importHookPackLabel.halign = .start
-        importHookPackBox.append(child: importHookPackLabel)
-        importHookPackRow.set(child: importHookPackBox)
+        let newCustomRow = makeActionRow(iconName: "list-add-symbolic", title: "New Custom Instrument\u{2026}")
+        listBox.append(child: newCustomRow)
+        rowKinds.append(.newCustom)
+
+        let importHookPackRow = makeActionRow(iconName: "document-save-symbolic", title: "Import from Hookpack\u{2026}")
         listBox.append(child: importHookPackRow)
-        importHookPackIndex = descriptors.count + 1
+        rowKinds.append(.importHookPack)
 
         showPlaceholder(message: "Select an instrument to configure.")
 
         listBox.onRowSelected { [weak self] _, row in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if let row {
-                    let idx = Int(row.index)
-                    if idx == self.newCustomIndex {
-                        self.selectedIndex = nil
-                        self.addButton.sensitive = true
-                        self.addButton.label = "Add"
-                        self.showNewCustomDetail()
-                    } else if idx == self.importHookPackIndex {
-                        self.selectedIndex = nil
-                        self.addButton.sensitive = true
-                        self.addButton.label = "Choose Folder\u{2026}"
-                        self.showImportHookPackDetail()
-                    } else {
-                        self.selectedIndex = idx
-                        self.addButton.sensitive = true
-                        self.addButton.label = "Add"
-                        self.refreshDetail()
-                    }
-                } else {
+                guard let row else {
                     self.selectedIndex = nil
                     self.addButton.sensitive = false
                     self.addButton.label = "Add"
                     self.tracerEditor = nil
                     self.showPlaceholder(message: "Select an instrument to configure.")
+                    return
+                }
+                let kind = self.rowKinds[Int(row.index)]
+                switch kind {
+                case .header:
+                    return
+                case .newCustom:
+                    self.selectedIndex = nil
+                    self.addButton.sensitive = true
+                    self.addButton.label = "Add"
+                    self.showNewCustomDetail()
+                case .importHookPack:
+                    self.selectedIndex = nil
+                    self.addButton.sensitive = true
+                    self.addButton.label = "Choose Folder\u{2026}"
+                    self.showImportHookPackDetail()
+                case .descriptor(let descriptorIndex):
+                    self.selectedIndex = descriptorIndex
+                    let descriptor = self.descriptors[descriptorIndex]
+                    let reason = self.incompatibilityReasons[descriptor.id]
+                    self.addButton.sensitive = reason == nil
+                    self.addButton.label = "Add"
+                    self.refreshDetail()
                 }
             }
         }
@@ -197,14 +185,104 @@ final class AddInstrumentDialog {
         dialog.present(parent: parentWindow)
     }
 
-    private func hintLabel(_ text: String) -> Label {
-        let hint = Label(str: text)
-        hint.halign = .start
-        hint.add(cssClass: "caption")
-        hint.add(cssClass: "dim-label")
-        hint.wrap = true
-        hint.xalign = 0
-        return hint
+    private func makeDescriptorRow(
+        descriptor: LumaCore.InstrumentDescriptor,
+        alreadyAdded: Bool,
+        incompatibilityReason: String?
+    ) -> ListBoxRow {
+        let row = ListBoxRow()
+        let rowBox = Box(orientation: .vertical, spacing: 2)
+        rowBox.marginStart = 12
+        rowBox.marginEnd = 12
+        rowBox.marginTop = 6
+        rowBox.marginBottom = 6
+        rowBox.valign = .center
+
+        let header = Box(orientation: .horizontal, spacing: 8)
+        header.append(child: InstrumentIconView.makeImage(for: descriptor.icon, pixelSize: 16))
+        let label = Label(str: descriptor.displayName)
+        label.halign = .start
+        label.hexpand = true
+        header.append(child: label)
+        if let reason = incompatibilityReason {
+            let warning = Gtk.Image(iconName: "dialog-warning-symbolic")
+            warning.pixelSize = 12
+            warning.tooltipText = reason
+            header.append(child: warning)
+        }
+        rowBox.append(child: header)
+
+        if alreadyAdded {
+            let hint = Label(str: "Already added")
+            hint.halign = .start
+            hint.add(cssClass: "caption")
+            hint.add(cssClass: "dim-label")
+            hint.marginStart = 25
+            rowBox.append(child: hint)
+            row.sensitive = false
+            row.selectable = false
+        }
+        row.set(child: rowBox)
+        return row
+    }
+
+    private func makeCustomInstrumentsHeaderRow() -> ListBoxRow {
+        let row = ListBoxRow()
+        row.sensitive = false
+        row.selectable = false
+        let label = Label(str: "CUSTOM INSTRUMENTS")
+        label.halign = .start
+        label.add(cssClass: "caption-heading")
+        label.add(cssClass: "dim-label")
+        label.marginStart = 12
+        label.marginEnd = 12
+        label.marginTop = 14
+        label.marginBottom = 4
+        row.set(child: label)
+        return row
+    }
+
+    private func makeActionRow(iconName: String, title: String) -> ListBoxRow {
+        let row = ListBoxRow()
+        let rowBox = Box(orientation: .horizontal, spacing: 8)
+        rowBox.marginStart = 12
+        rowBox.marginEnd = 12
+        rowBox.marginTop = 6
+        rowBox.marginBottom = 6
+        rowBox.valign = .center
+        let icon = Gtk.Image(iconName: iconName)
+        icon.pixelSize = 16
+        rowBox.append(child: icon)
+        let label = Label(str: title)
+        label.halign = .start
+        label.hexpand = true
+        rowBox.append(child: label)
+        row.set(child: rowBox)
+        return row
+    }
+
+    private func appendIncompatibilityBanner(reason: String) {
+        let bar = Box(orientation: .horizontal, spacing: 8)
+        bar.add(cssClass: "warning")
+        bar.marginStart = 0
+        bar.marginEnd = 0
+        bar.marginTop = 0
+        bar.marginBottom = 0
+        let inner = Box(orientation: .horizontal, spacing: 8)
+        inner.marginStart = 16
+        inner.marginEnd = 16
+        inner.marginTop = 10
+        inner.marginBottom = 10
+        let icon = Gtk.Image(iconName: "dialog-warning-symbolic")
+        icon.pixelSize = 16
+        inner.append(child: icon)
+        let label = Label(str: reason)
+        label.halign = .start
+        label.wrap = true
+        label.xalign = 0
+        inner.append(child: label)
+        bar.append(child: inner)
+        detailContainer.append(child: bar)
     }
 
     private static var retained: [ObjectIdentifier: AddInstrumentDialog] = [:]
@@ -259,6 +337,10 @@ final class AddInstrumentDialog {
         pendingConfigJSON = descriptor.makeInitialConfigJSON()
 
         clearDetail()
+
+        if let reason = incompatibilityReasons[descriptor.id] {
+            appendIncompatibilityBanner(reason: reason)
+        }
 
         switch descriptor.kind {
         case .tracer:
@@ -694,14 +776,15 @@ final class AddInstrumentDialog {
 
     private func commit() {
         if let row = listBox.selectedRow {
-            let idx = Int(row.index)
-            if idx == newCustomIndex {
+            switch rowKinds[Int(row.index)] {
+            case .newCustom:
                 commitNewCustom()
                 return
-            }
-            if idx == importHookPackIndex {
+            case .importHookPack:
                 presentHookPackImportPicker()
                 return
+            case .header, .descriptor:
+                break
             }
         }
         guard let index = selectedIndex, index < descriptors.count else { return }
