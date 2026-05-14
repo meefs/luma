@@ -230,7 +230,7 @@ final class AddInstrumentDialog {
         let row = ListBoxRow()
         row.sensitive = false
         row.selectable = false
-        let label = Label(str: "CUSTOM INSTRUMENTS")
+        let label = Label(str: "Custom Instruments")
         label.halign = .start
         label.add(cssClass: "caption-heading")
         label.add(cssClass: "dim-label")

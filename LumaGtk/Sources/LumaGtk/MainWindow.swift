@@ -989,7 +989,7 @@ final class MainWindow: InstrumentUIHost {
             }
         }
 
-        let headerLabel = Label(str: "SESSIONS (0)")
+        let headerLabel = Label(str: "Sessions (0)")
         headerLabel.halign = .start
         headerLabel.add(cssClass: "caption-heading")
         headerLabel.add(cssClass: "dim-label")
@@ -1025,7 +1025,7 @@ final class MainWindow: InstrumentUIHost {
             }
         }
 
-        let headerLabel = Label(str: "CUSTOM INSTRUMENTS (0)")
+        let headerLabel = Label(str: "Custom Instruments (0)")
         headerLabel.halign = .start
         headerLabel.add(cssClass: "caption-heading")
         headerLabel.add(cssClass: "dim-label")
@@ -1080,7 +1080,7 @@ final class MainWindow: InstrumentUIHost {
             }
         }
         customInstrumentRows = rows
-        customInstrumentsHeaderLabel?.label = "CUSTOM INSTRUMENTS (\(defs.count))"
+        customInstrumentsHeaderLabel?.label = "Custom Instruments (\(defs.count))"
         customInstrumentsSection?.visible = !defs.isEmpty
 
         invalidateStaleCustomInstrumentSelection(defs: defs, engine: engine)
@@ -1518,7 +1518,7 @@ final class MainWindow: InstrumentUIHost {
             }
         }
 
-        let headerLabel = Label(str: "PACKAGES (0)")
+        let headerLabel = Label(str: "Packages (0)")
         headerLabel.halign = .start
         headerLabel.add(cssClass: "caption-heading")
         headerLabel.add(cssClass: "dim-label")
@@ -1536,17 +1536,6 @@ final class MainWindow: InstrumentUIHost {
         packagesSection.visible = false
         packagesSidebarSection = packagesSection
         return packagesSection
-    }
-
-    private func sectionHeader(_ title: String) -> Label {
-        let label = Label(str: title.uppercased())
-        label.halign = .start
-        label.marginStart = 16
-        label.marginEnd = 12
-        label.marginTop = 12
-        label.marginBottom = 4
-        label.add(cssClass: "heading")
-        return label
     }
 
     // MARK: - Detail
@@ -2296,7 +2285,7 @@ final class MainWindow: InstrumentUIHost {
         case .descriptorsChanged, .customInstrumentDefsChanged:
             refreshInstrumentRowVisuals()
         }
-        sessionsHeaderLabel?.label = "SESSIONS (\(sessions.count))"
+        sessionsHeaderLabel?.label = "Sessions (\(sessions.count))"
         sessionsSection?.visible = !sessions.isEmpty
     }
 
@@ -3099,7 +3088,7 @@ final class MainWindow: InstrumentUIHost {
             row.set(child: label)
             packagesList.append(child: row)
         }
-        packagesHeaderLabel?.label = "PACKAGES (\(snapshot.count))"
+        packagesHeaderLabel?.label = "Packages (\(snapshot.count))"
         packagesSidebarSection?.visible = !snapshot.isEmpty
     }
 
