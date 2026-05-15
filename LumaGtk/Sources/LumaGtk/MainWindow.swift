@@ -1115,21 +1115,25 @@ final class MainWindow: InstrumentUIHost {
         isExpanded: Bool
     ) -> ListBoxRow {
         let row = ListBoxRow()
-        let box = Box(orientation: .horizontal, spacing: MainWindow.sidebarColumnSpacing)
-        box.marginStart = MainWindow.sidebarHeaderMarginStart
+        let box = Box(orientation: .horizontal, spacing: 0)
+        box.marginStart = MainWindow.sidebarRowLeadingPad
         box.marginEnd = 12
         box.marginTop = 4
         box.marginBottom = 4
 
+        let chevronWidget: Widget
         if hasAuxiliaryFiles {
-            box.append(child: makeCustomInstrumentChevron(isExpanded: isExpanded) { [weak self] in
+            chevronWidget = makeCustomInstrumentChevron(isExpanded: isExpanded) { [weak self] in
                 self?.toggleCustomInstrumentExpansion(defID: def.id)
-            })
+            }
         } else {
-            box.append(child: makeChevronSpacer())
+            chevronWidget = makeChevronSpacer()
         }
+        chevronWidget.marginEnd = MainWindow.sidebarChevronToIconSpacing
+        box.append(child: chevronWidget)
 
-        let iconHost = MainWindow.makeIconHost()
+        let iconHost = MainWindow.makeParentIconHost()
+        iconHost.marginEnd = MainWindow.sidebarIconToLabelSpacing
         let icon = InstrumentIconView.makeImage(for: def.icon, pixelSize: 16)
         MainWindow.centerInIconHost(icon)
         iconHost.append(child: icon)
@@ -2296,8 +2300,8 @@ final class MainWindow: InstrumentUIHost {
         }
 
         let headerRow = ListBoxRow()
-        let headerBox = Box(orientation: .horizontal, spacing: MainWindow.sidebarColumnSpacing)
-        headerBox.marginStart = MainWindow.sidebarHeaderMarginStart
+        let headerBox = Box(orientation: .horizontal, spacing: 0)
+        headerBox.marginStart = MainWindow.sidebarRowLeadingPad
         headerBox.marginEnd = 3
         headerBox.marginTop = 4
         headerBox.marginBottom = 4
@@ -2307,9 +2311,11 @@ final class MainWindow: InstrumentUIHost {
             self?.toggleSessionExpansion(sessionID: session.id)
         }
         sessionChevronImages[session.id] = chevron.image
+        chevron.button.marginEnd = MainWindow.sidebarChevronToIconSpacing
         headerBox.append(child: chevron.button)
 
         let icon = makeSessionIcon(for: session, node: engine?.node(forSessionID: session.id))
+        icon.marginEnd = MainWindow.sidebarIconToLabelSpacing
         headerBox.append(child: icon)
 
         let titles = Box(orientation: .vertical, spacing: 2)
@@ -2562,29 +2568,41 @@ final class MainWindow: InstrumentUIHost {
         "\(instrumentID.uuidString)/\(key)"
     }
 
-    private static let sidebarHeaderMarginStart = 0
+    private static let sidebarRowLeadingPad = 3
     private static let sidebarChevronColumnWidth = 24
+    private static let sidebarChevronToIconSpacing = 5
     private static let sidebarIconColumnWidth = 24
-    private static let sidebarColumnSpacing = 8
-    private static let sessionChildMarginStart = sidebarHeaderMarginStart
+    private static let sidebarIconToLabelSpacing = 6
+    private static let sidebarChildIconColumnWidth = 16
+    static let sessionChildMarginStart = sidebarRowLeadingPad
         + sidebarChevronColumnWidth
-        + sidebarColumnSpacing
+        + sidebarChevronToIconSpacing
+        + sidebarIconColumnWidth
+    static let sessionGrandchildMarginStart = sessionChildMarginStart + sidebarChildIconColumnWidth
 
     private static func makeChildRowBox() -> (rowBox: Box, iconHost: Box) {
-        let rowBox = Box(orientation: .horizontal, spacing: sidebarColumnSpacing)
+        let rowBox = Box(orientation: .horizontal, spacing: sidebarIconToLabelSpacing)
         rowBox.halign = .start
         rowBox.marginStart = sessionChildMarginStart
         rowBox.marginEnd = 12
         rowBox.marginTop = 2
         rowBox.marginBottom = 2
-        let iconHost = makeIconHost()
+        let iconHost = makeChildIconHost()
         rowBox.append(child: iconHost)
         return (rowBox, iconHost)
     }
 
-    private static func makeIconHost() -> Box {
+    private static func makeParentIconHost() -> Box {
+        makeFixedWidthIconHost(width: sidebarIconColumnWidth)
+    }
+
+    private static func makeChildIconHost() -> Box {
+        makeFixedWidthIconHost(width: sidebarChildIconColumnWidth)
+    }
+
+    private static func makeFixedWidthIconHost(width: Int) -> Box {
         let iconHost = Box(orientation: .horizontal, spacing: 0)
-        iconHost.setSizeRequest(width: sidebarIconColumnWidth, height: -1)
+        iconHost.setSizeRequest(width: width, height: -1)
         iconHost.hexpand = false
         return iconHost
     }

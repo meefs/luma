@@ -258,7 +258,7 @@ enum StyleSheet {
 
     .luma-session-icon {
         border-radius: 4px;
-        border: 1px solid alpha(@accent_bg_color, 0.4);
+        box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.4);
     }
 
     .luma-event-badge {

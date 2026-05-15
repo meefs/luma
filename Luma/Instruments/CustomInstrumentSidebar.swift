@@ -72,21 +72,13 @@ struct SidebarCustomInstrumentDefRow: View {
     @State private var exportErrorMessage: String?
 
     var body: some View {
-        HStack(spacing: 8) {
-            if hasAuxiliaryFiles {
-                Button(action: onToggleExpansion) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .frame(width: 14, height: 14)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isExpanded ? "Collapse instrument" : "Expand instrument")
-            }
+        HStack(spacing: 0) {
+            chevron
+                .padding(.leading, sidebarRowLeadingPad)
+                .padding(.trailing, sidebarChevronToIconSpacing)
             InstrumentIconView(icon: def.icon, pointSize: 16)
-                .frame(width: 24, alignment: .center)
+                .frame(width: sidebarParentIconWidth, alignment: .center)
+                .padding(.trailing, sidebarIconToLabelSpacing)
             Text(def.name)
             Spacer()
         }
@@ -211,6 +203,24 @@ struct SidebarCustomInstrumentDefRow: View {
             Button("OK") { exportErrorMessage = nil }
         } message: { message in
             Text(message)
+        }
+    }
+
+    @ViewBuilder
+    private var chevron: some View {
+        if hasAuxiliaryFiles {
+            Button(action: onToggleExpansion) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: sidebarChevronWidth, height: sidebarChevronWidth)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded ? "Collapse instrument" : "Expand instrument")
+        } else {
+            Color.clear.frame(width: sidebarChevronWidth, height: sidebarChevronWidth)
         }
     }
 

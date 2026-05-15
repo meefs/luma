@@ -2,9 +2,18 @@ import Frida
 import LumaCore
 import SwiftUI
 
-private let subrowIconWidth: CGFloat = 16
-let sidebarChildIndent: CGFloat = 26
-let sidebarGrandchildIndent: CGFloat = 48
+let sidebarRowLeadingPad: CGFloat = 3
+let sidebarChevronWidth: CGFloat = 14
+let sidebarChevronToIconSpacing: CGFloat = 5
+let sidebarIconToLabelSpacing: CGFloat = 6
+let sidebarParentIconWidth: CGFloat = 24
+let sidebarChildIconWidth: CGFloat = 16
+
+let sidebarChildIndent: CGFloat =
+    sidebarRowLeadingPad + sidebarChevronWidth + sidebarChevronToIconSpacing + sidebarParentIconWidth
+let sidebarGrandchildIndent: CGFloat = sidebarChildIndent + sidebarChildIconWidth
+
+private let subrowIconWidth: CGFloat = sidebarChildIconWidth
 
 struct SidebarView: View {
     let engine: Engine
@@ -269,20 +278,23 @@ private struct SidebarSessionHeaderRow: View {
     @State private var armPatternDraft: String = ""
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             Button(action: onToggleExpansion) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .frame(width: 14, height: 14)
+                    .frame(width: sidebarChevronWidth, height: sidebarChevronWidth)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.leading, sidebarRowLeadingPad)
+            .padding(.trailing, sidebarChevronToIconSpacing)
             .accessibilityLabel(isExpanded ? "Collapse session" : "Expand session")
 
             iconView
-                .frame(width: 24, height: 24)
+                .frame(width: sidebarParentIconWidth, height: sidebarParentIconWidth)
+                .padding(.trailing, sidebarIconToLabelSpacing)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {

@@ -5,7 +5,7 @@ import LumaCore
 @MainActor
 enum TracerSidebar {
     static let inlineLimit = 5
-    static let rowMarginStart = 64
+    static let rowMarginStart = MainWindow.sessionGrandchildMarginStart
 
     static func makeHookRow(hook: TracerConfig.Hook, status: InstrumentStatus?) -> (row: ListBoxRow, anchor: Box) {
         let row = ListBoxRow()
@@ -27,14 +27,14 @@ enum TracerSidebar {
     }
 
     private static func makeGrandchildRowBox() -> (rowBox: Box, iconHost: Box) {
-        let rowBox = Box(orientation: .horizontal, spacing: 8)
+        let rowBox = Box(orientation: .horizontal, spacing: 6)
         rowBox.halign = .start
         rowBox.marginStart = rowMarginStart
         rowBox.marginEnd = 12
         rowBox.marginTop = 2
         rowBox.marginBottom = 2
         let iconHost = Box(orientation: .horizontal, spacing: 0)
-        iconHost.setSizeRequest(width: 24, height: -1)
+        iconHost.setSizeRequest(width: 16, height: -1)
         iconHost.hexpand = false
         rowBox.append(child: iconHost)
         return (rowBox, iconHost)
