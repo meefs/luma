@@ -8,7 +8,6 @@ struct LumaProject: FileDocument {
     static let writableContentTypes: [UTType] = readableContentTypes
 
     var workingProjectURL: URL
-    var revision: Int = 0
 
     init() {
         let doc = (try? LumaDocumentLoader.makeUntitled(in: LumaAppPaths.shared.untitledDirectory))

@@ -5,7 +5,6 @@ import LumaCore
 struct MainWindowView: View {
     private let projectURL: URL
     private let fileURL: URL?
-    private let project: Binding<LumaProject>?
 
     @State private var engineResult: Result<Engine, any Swift.Error>
     @State private var picker = TargetPicker()
@@ -13,10 +12,9 @@ struct MainWindowView: View {
     @State private var collapsedNewEvents: Int = 0
     @State private var isShowingHostingBlockedAlert = false
 
-    init(projectURL: URL, fileURL: URL? = nil, project: Binding<LumaProject>? = nil) {
+    init(projectURL: URL, fileURL: URL? = nil) {
         self.projectURL = projectURL
         self.fileURL = fileURL
-        self.project = project
         let result: Result<Engine, any Swift.Error>
         do {
             let engine = try EngineRegistry.shared.engine(
@@ -38,7 +36,6 @@ struct MainWindowView: View {
                 engine: engine,
                 picker: picker,
                 projectURL: projectURL,
-                project: project,
                 restorationPath: restorationPath,
                 collapsedEventBaselineVersion: $collapsedEventBaselineVersion,
                 collapsedNewEvents: $collapsedNewEvents,
@@ -67,7 +64,6 @@ private struct ProjectContentView: View {
     let engine: Engine
     let picker: TargetPicker
     let projectURL: URL
-    let project: Binding<LumaProject>?
     let restorationPath: String
 
     @Binding var collapsedEventBaselineVersion: Int
@@ -131,13 +127,6 @@ private struct ProjectContentView: View {
             Task { @MainActor in
                 await EngineRegistry.shared.release(workingProjectURL: url)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: ProjectStore.didCommitNotification)) { note in
-            guard
-                let id = note.userInfo?["instanceID"] as? UUID,
-                id == engine.store.instanceID
-            else { return }
-            project?.wrappedValue.revision &+= 1
         }
         .onChange(of: engine.eventLog.totalReceived) { _, newVersion in
             if engine.projectUIState.isEventStreamCollapsed {

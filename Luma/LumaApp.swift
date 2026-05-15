@@ -37,8 +37,7 @@ func sharedGitHubAuth() -> GitHubAuth { sharedWelcomeModel.gitHubAuth }
             DocumentGroup(newDocument: LumaProject()) { configuration in
                 MainWindowView(
                     projectURL: configuration.document.workingProjectURL,
-                    fileURL: configuration.fileURL,
-                    project: configuration.$document
+                    fileURL: configuration.fileURL
                 )
             }
             .defaultSize(width: 1100, height: 680)
