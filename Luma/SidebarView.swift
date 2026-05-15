@@ -299,6 +299,10 @@ private struct SidebarSessionHeaderRow: View {
             }
 
             Spacer()
+
+            if isDetached {
+                detachedIndicator
+            }
         }
         .padding(.vertical, 4)
         .contextMenu {
@@ -414,6 +418,39 @@ private struct SidebarSessionHeaderRow: View {
     private var isArmed: Bool {
         if case .armed = session.armingState { return true }
         return false
+    }
+
+    private var isDetached: Bool {
+        guard node == nil, !isArmed else { return false }
+        if session.lastAttachedAt != nil { return true }
+        if case .attach = session.kind { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private var detachedIndicator: some View {
+        if session.phase == .attaching {
+            ProgressView()
+                .controlSize(.small)
+                .help(session.kind.inProgressLabel)
+        } else {
+            Button(action: reestablish) {
+                Image(systemName: "arrow.clockwise.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(detachedTint)
+            }
+            .buttonStyle(.plain)
+            .help("\(session.kind.reestablishLabel)")
+        }
+    }
+
+    private var detachedTint: Color {
+        switch session.detachReason {
+        case .applicationRequested:
+            return .orange
+        default:
+            return .red
+        }
     }
 
     private func presentArmPrompt() {
