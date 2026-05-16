@@ -30,6 +30,10 @@ struct TracerConfigView: View {
     @State private var showUnsavedChangesAlert = false
     @State private var pendingSelectionID: UUID?
 
+    @State private var isShowingITraceConfig = false
+    @State private var itraceDraftMaxInvocations: Int = ITraceArming.defaultMaxInvocations
+    @State private var itraceDraftMaxBytes: Int = ITraceArming.defaultMaxBytesPerInvocation
+
     @State private var draftCode: String = ""
     @State private var isDirty: Bool = false
     @State private var showSavedCheck: Bool = false
@@ -339,6 +343,29 @@ struct TracerConfigView: View {
                 }
                 if let hook = selectedHook {
                     Divider()
+                    if hook.kind == .function {
+                        if hook.itraceArming != nil {
+                            Button {
+                                applyITraceArming(nil)
+                            } label: {
+                                Label("Disable Instruction Trace", systemImage: "scope")
+                            }
+                            Button {
+                                seedITraceDrafts(from: hook)
+                                isShowingITraceConfig = true
+                            } label: {
+                                Label("Edit Instruction Trace\u{2026}", systemImage: "slider.horizontal.3")
+                            }
+                        } else {
+                            Button {
+                                seedITraceDrafts(from: hook)
+                                isShowingITraceConfig = true
+                            } label: {
+                                Label("Enable Instruction Trace\u{2026}", systemImage: "scope")
+                            }
+                        }
+                        Divider()
+                    }
                     Button(role: .destructive) {
                         hookToDelete = hook
                         showDeleteConfirmation = true
@@ -358,11 +385,49 @@ struct TracerConfigView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
+            .popover(isPresented: $isShowingITraceConfig, arrowEdge: .trailing) {
+                ITracePopover(
+                    captured: selectedHook.map { itraceCaptured(for: $0.id) } ?? 0,
+                    isOn: selectedHook?.itraceArming != nil,
+                    draftMaxInvocations: $itraceDraftMaxInvocations,
+                    draftMaxBytes: $itraceDraftMaxBytes,
+                    onEnable: {
+                        applyITraceArming(
+                            ITraceArming(
+                                maxInvocations: itraceDraftMaxInvocations,
+                                maxBytesPerInvocation: itraceDraftMaxBytes
+                            )
+                        )
+                        isShowingITraceConfig = false
+                    },
+                    onDisable: {
+                        applyITraceArming(nil)
+                        isShowingITraceConfig = false
+                    }
+                )
+            }
 
             addHookButton
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private func seedITraceDrafts(from hook: TracerConfig.Hook) {
+        let seed = hook.itraceArming ?? ITraceArming()
+        itraceDraftMaxInvocations = seed.maxInvocations
+        itraceDraftMaxBytes = seed.maxBytesPerInvocation
+    }
+
+    private func applyITraceArming(_ arming: ITraceArming?) {
+        guard let session = instrumentSession,
+              let hookID = selectedHookID
+        else { return }
+        Task { @MainActor in
+            await engine.updateTracerHook(sessionID: session.id, hookID: hookID) { hook in
+                hook.itraceArming = arming
+            }
+        }
     }
 
     private var hookPickerBinding: Binding<UUID?> {
