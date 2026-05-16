@@ -421,9 +421,9 @@ public enum MissionTools {
     private static func registerListModules(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "list_modules",
-            description: "List loaded modules (libraries, frameworks, main binary) in the target process. Returns name, base, size, path.",
+            description: "List loaded modules (libraries, frameworks, main binary) in the target process. Real processes can have ~1000 modules, so the result is filtered and capped by default. Pass 'match' (case-insensitive substring matched against name and path) to narrow, 'limit' to cap, and 'detail' to choose projection. Default detail 'summary' returns {name, base}; 'full' adds size and path. Response shape: {total, matched, returned, truncated, modules}.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"session_id":{"type":"string","description":"Session UUID to query"}},"required":["session_id"],"additionalProperties":false}
+                {"type":"object","properties":{"session_id":{"type":"string","description":"Session UUID to query"},"match":{"type":"string","description":"Case-insensitive substring matched against module name and path. Omit to consider all modules."},"limit":{"type":"integer","minimum":1,"maximum":500,"description":"Max modules to return (default 64)"},"detail":{"type":"string","enum":["summary","full"],"description":"'summary' = name+base only (default). 'full' adds size and path."}},"required":["session_id"],"additionalProperties":false}
                 """,
             isObserve: true,
             requiresSession: true
@@ -435,16 +435,44 @@ public enum MissionTools {
             guard let node = engine.node(forSessionID: sessionID) else {
                 return errorResult("no attached session for id \(sessionID)", code: .notFound)
             }
-            let mods = node.modules
-            let array: [[String: Any]] = mods.map { m in
-                [
+            let all = node.modules
+            let needle = (invocation.args["match"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let matched: [ProcessModule]
+            if let needle {
+                let lowered = needle.lowercased()
+                matched = all.filter { $0.name.lowercased().contains(lowered) || $0.path.lowercased().contains(lowered) }
+            } else {
+                matched = all
+            }
+            let limit = max(1, min(500, (invocation.args["limit"] as? Int) ?? 64))
+            let returned = Array(matched.prefix(limit))
+            let truncated = matched.count > returned.count
+            let detail = (invocation.args["detail"] as? String) ?? "summary"
+            let modulesJSON: [[String: Any]] = returned.map { m in
+                var entry: [String: Any] = [
                     "name": m.name,
                     "base": String(format: "0x%llx", m.base),
-                    "size": m.size,
-                    "path": m.path,
                 ]
+                if detail == "full" {
+                    entry["size"] = m.size
+                    entry["path"] = m.path
+                }
+                return entry
             }
-            return makeResult(jsonObject: array, summary: "Listed \(mods.count) module\(mods.count == 1 ? "" : "s")")
+            let payload: [String: Any] = [
+                "total": all.count,
+                "matched": matched.count,
+                "returned": returned.count,
+                "truncated": truncated,
+                "modules": modulesJSON,
+            ]
+            let summary: String
+            if let needle {
+                summary = "Matched \(matched.count)/\(all.count) module\(matched.count == 1 ? "" : "s") for '\(needle)'\(truncated ? " (returning \(returned.count))" : "")"
+            } else {
+                summary = "\(all.count) module\(all.count == 1 ? "" : "s") loaded\(truncated ? "; returning first \(returned.count)" : "")"
+            }
+            return makeResult(jsonObject: payload, summary: summary)
         }
     }
 
