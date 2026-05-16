@@ -273,7 +273,7 @@ struct SidebarCustomInstrumentDefRow: View {
     }
 }
 
-private extension SidebarItemID {
+extension SidebarItemID {
     func belongsTo(defID: UUID) -> Bool {
         switch self {
         case .customInstrumentDef(let id) where id == defID:
