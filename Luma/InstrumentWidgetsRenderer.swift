@@ -22,13 +22,19 @@ struct InstrumentWidgetsRenderer: View {
                             selection: selection
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .disabled(instance == nil)
+                        .disabled(!isLive)
                     } label: {
                         widgetHeader(widget: widget)
                     }
                 }
             }
         }
+    }
+
+    private var isLive: Bool {
+        guard let instance else { return false }
+        if engine.isHostingNode(instance.sessionID) { return true }
+        return engine.isHostedRemotelyLive(instance.sessionID)
     }
 
     private func widgetHeader(widget: InstrumentWidget) -> some View {
