@@ -598,11 +598,11 @@ private struct SidebarInstrumentRow: View {
             InstrumentIconView(icon: descriptor.icon, pointSize: 12)
                 .frame(width: subrowIconWidth, alignment: .center)
             Text(descriptor.displayName)
-            if let reason = incompatibilityReason {
+            if let status = runtimeStatus {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
-                    .help(reason)
+                    .help(status.summary)
             }
             Spacer()
         }
@@ -651,8 +651,8 @@ private struct SidebarInstrumentRow: View {
         engine.descriptor(for: instance)
     }
 
-    private var incompatibilityReason: String? {
-        node?.instruments.first(where: { $0.id == instance.id })?.incompatibilityReason
+    private var runtimeStatus: InstrumentStatus? {
+        node?.instruments.first(where: { $0.id == instance.id })?.status
     }
 
     private func deleteInstrument() {

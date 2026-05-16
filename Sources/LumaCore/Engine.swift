@@ -2355,18 +2355,18 @@ public final class Engine {
         on node: ProcessNode
     ) async -> Bool {
         guard !compatibility.isUniversal else {
-            node.clearInstrumentIncompatibility(id: instanceID)
+            node.clearInstrumentStatus(id: instanceID)
             return false
         }
         guard let params = await systemParameters.parameters(for: node.device) else {
-            node.clearInstrumentIncompatibility(id: instanceID)
+            node.clearInstrumentStatus(id: instanceID)
             return false
         }
         guard let reason = compatibility.incompatibilityReason(for: params) else {
-            node.clearInstrumentIncompatibility(id: instanceID)
+            node.clearInstrumentStatus(id: instanceID)
             return false
         }
-        node.markInstrumentIncompatible(id: instanceID, reason: reason)
+        node.setInstrumentStatus(id: instanceID, .incompatible(reason: reason))
         return true
     }
 

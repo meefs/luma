@@ -37,7 +37,7 @@ public struct InstrumentCompatibility: Codable, Hashable, Sendable {
             requirements.append("architecture \(formatRequirement(archs, displayedBy: InstrumentCompatibility.archDisplayName))")
         }
         guard !requirements.isEmpty else { return nil }
-        return "Requires \(requirements.joined(separator: ", ")); this session is \(describeSession(params))."
+        return "Requires \(requirements.joined(separator: ", ")); this session is \(describeSession(params))"
     }
 
     private func formatRequirement(_ values: Set<String>, displayedBy display: (String) -> String) -> String {

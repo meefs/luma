@@ -1207,21 +1207,21 @@ final class MainWindow: InstrumentUIHost {
                 replaceIconHostContents(host, with: descriptor.icon)
             }
             if let host = instrumentRowWarningHosts[id] {
-                populateIncompatibilityWarning(host: host, reason: instrumentIncompatibilityReason(for: instrument))
+                populateStatusWarning(host: host, status: instrumentRuntimeStatus(for: instrument))
             }
         }
     }
 
-    private func populateIncompatibilityWarning(host: Box, reason: String?) {
+    private func populateStatusWarning(host: Box, status: InstrumentStatus?) {
         var child = host.firstChild
         while let cur = child {
             child = cur.nextSibling
             host.remove(child: cur)
         }
-        guard let reason else { return }
+        guard let status else { return }
         let warning = Gtk.Image(iconName: "dialog-warning-symbolic")
         warning.pixelSize = 12
-        warning.tooltipText = reason
+        warning.tooltipText = status.summary
         host.append(child: warning)
     }
 
@@ -2251,7 +2251,7 @@ final class MainWindow: InstrumentUIHost {
                 instrumentsBySession[instrument.sessionID]![i] = instrument
             }
             if let warningHost = instrumentRowWarningHosts[instrument.id] {
-                populateIncompatibilityWarning(host: warningHost, reason: instrumentIncompatibilityReason(for: instrument))
+                populateStatusWarning(host: warningHost, status: instrumentRuntimeStatus(for: instrument))
             }
             reconcileInstrumentChildren(for: instrument)
             if let detail = currentInstrumentDetail, detail.instrumentID == instrument.id {
@@ -2609,7 +2609,7 @@ final class MainWindow: InstrumentUIHost {
         rowBox.append(child: ilabel)
         let warningHost = Box(orientation: .horizontal, spacing: 0)
         rowBox.append(child: warningHost)
-        populateIncompatibilityWarning(host: warningHost, reason: instrumentIncompatibilityReason(for: instrument))
+        populateStatusWarning(host: warningHost, status: instrumentRuntimeStatus(for: instrument))
         instrumentRowLabels[instrument.id] = ilabel
         instrumentRowIconHosts[instrument.id] = iconHost
         instrumentRowWarningHosts[instrument.id] = warningHost
@@ -2621,9 +2621,9 @@ final class MainWindow: InstrumentUIHost {
         return row
     }
 
-    private func instrumentIncompatibilityReason(for instrument: LumaCore.InstrumentInstance) -> String? {
+    private func instrumentRuntimeStatus(for instrument: LumaCore.InstrumentInstance) -> InstrumentStatus? {
         guard let node = engine?.node(forSessionID: instrument.sessionID) else { return nil }
-        return node.instruments.first(where: { $0.id == instrument.id })?.incompatibilityReason
+        return node.instruments.first(where: { $0.id == instrument.id })?.status
     }
 
     private func makeInsightRow(_ insight: LumaCore.AddressInsight) -> ListBoxRow {

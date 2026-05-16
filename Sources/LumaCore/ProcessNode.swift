@@ -45,7 +45,7 @@ public final class ProcessNode: Identifiable {
         public var configJSON: Data
         public var state: InstrumentState
         public var attachment: AttachmentState
-        public var incompatibilityReason: String?
+        public var status: InstrumentStatus?
 
         public init(
             id: UUID,
@@ -54,7 +54,7 @@ public final class ProcessNode: Identifiable {
             configJSON: Data,
             state: InstrumentState = .enabled,
             attachment: AttachmentState = .detached,
-            incompatibilityReason: String? = nil
+            status: InstrumentStatus? = nil
         ) {
             self.id = id
             self.kind = kind
@@ -62,7 +62,7 @@ public final class ProcessNode: Identifiable {
             self.configJSON = configJSON
             self.state = state
             self.attachment = attachment
-            self.incompatibilityReason = incompatibilityReason
+            self.status = status
         }
     }
 
@@ -1009,7 +1009,7 @@ public final class ProcessNode: Identifiable {
     public func markInstrumentAttached(id: UUID) {
         if let i = instruments.firstIndex(where: { $0.id == id }) {
             instruments[i].attachment = .attached
-            instruments[i].incompatibilityReason = nil
+            instruments[i].status = nil
         }
     }
 
@@ -1019,16 +1019,16 @@ public final class ProcessNode: Identifiable {
         }
     }
 
-    public func markInstrumentIncompatible(id: UUID, reason: String) {
+    public func setInstrumentStatus(id: UUID, _ status: InstrumentStatus) {
         if let i = instruments.firstIndex(where: { $0.id == id }) {
             instruments[i].attachment = .detached
-            instruments[i].incompatibilityReason = reason
+            instruments[i].status = status
         }
     }
 
-    public func clearInstrumentIncompatibility(id: UUID) {
+    public func clearInstrumentStatus(id: UUID) {
         if let i = instruments.firstIndex(where: { $0.id == id }) {
-            instruments[i].incompatibilityReason = nil
+            instruments[i].status = nil
         }
     }
 
