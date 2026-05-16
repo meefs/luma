@@ -9,17 +9,20 @@ final class SessionCollaborationHeader {
 
     private weak var engine: LumaCore.Engine?
     private let sessionID: UUID
+    private let showHostChip: Bool
     private let onClaimDriver: () -> Void
     private let onRehost: () -> Void
 
     init(
         engine: LumaCore.Engine,
         sessionID: UUID,
+        showHostChip: Bool = true,
         onClaimDriver: @escaping () -> Void,
         onRehost: @escaping () -> Void
     ) {
         self.engine = engine
         self.sessionID = sessionID
+        self.showHostChip = showHostChip
         self.onClaimDriver = onClaimDriver
         self.onRehost = onRehost
 
@@ -45,33 +48,29 @@ final class SessionCollaborationHeader {
             return
         }
 
-        let host: LumaCore.CollaborationSession.UserInfo? = {
-            guard let session = engine.sessions.first(where: { $0.id == sessionID }),
-                  let host = session.host,
-                  host.id != engine.collaboration.localUser?.id
-            else { return nil }
-            return host
-        }()
+        let host = Self.host(in: engine, sessionID: sessionID)
         let driver: LumaCore.CollaborationSession.UserInfo? =
             engine.localUserIsDriver(ofSessionID: sessionID) ? nil : engine.driver(forSessionID: sessionID)
 
-        guard host != nil || driver != nil else {
+        let renderHostChip = showHostChip && host != nil
+
+        guard renderHostChip || driver != nil || (host != nil && engine.collaboration.isOwner) else {
             widget.visible = false
             return
         }
 
-        if let host {
-            widget.append(child: makeChip(prefix: "Hosted by", user: host))
+        if renderHostChip, let host {
+            widget.append(child: Self.makeChip(prefix: "Hosted by", user: host))
         }
 
-        if host != nil, driver != nil {
+        if renderHostChip, driver != nil {
             let dot = Label(str: "·")
             dot.add(cssClass: "dim-label")
             widget.append(child: dot)
         }
 
         if let driver {
-            widget.append(child: makeChip(prefix: "Driving:", user: driver))
+            widget.append(child: Self.makeChip(prefix: "Driving:", user: driver))
         }
 
         let spacer = Box(orientation: .horizontal, spacing: 0)
@@ -99,7 +98,15 @@ final class SessionCollaborationHeader {
         widget.visible = true
     }
 
-    private func makeChip(prefix: String, user: LumaCore.CollaborationSession.UserInfo) -> Widget {
+    static func host(in engine: LumaCore.Engine, sessionID: UUID) -> LumaCore.CollaborationSession.UserInfo? {
+        guard let session = engine.sessions.first(where: { $0.id == sessionID }),
+              let host = session.host,
+              host.id != engine.collaboration.localUser?.id
+        else { return nil }
+        return host
+    }
+
+    static func makeChip(prefix: String, user: LumaCore.CollaborationSession.UserInfo) -> Widget {
         let chip = Box(orientation: .horizontal, spacing: 6)
         chip.append(child: makeAvatar(user: user, size: 18))
 
@@ -111,7 +118,7 @@ final class SessionCollaborationHeader {
         return chip
     }
 
-    private func makeAvatar(user: LumaCore.CollaborationSession.UserInfo, size: Int) -> Widget {
+    private static func makeAvatar(user: LumaCore.CollaborationSession.UserInfo, size: Int) -> Widget {
         let displayName = user.name.isEmpty ? "@\(user.id)" : user.name
         let avatar = Adw.Avatar(size: size, text: displayName, showInitials: true)
         avatar.tooltipText = displayName
