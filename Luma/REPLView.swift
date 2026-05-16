@@ -28,6 +28,10 @@ struct REPLView: View {
         engine.localUserIsDriver(ofSessionID: sessionID)
     }
 
+    private var canSubmit: Bool {
+        localUserIsDriver || engine.collaboration.isOwner
+    }
+
     private var driver: LumaCore.CollaborationSession.UserInfo? {
         engine.driver(forSessionID: sessionID)
     }
@@ -142,7 +146,7 @@ struct REPLView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                if let node, localUserIsDriver {
+                if canSubmit {
                     REPLInputField(
                         text: $inputCode,
                         isFocused: $isInputFocused,
@@ -156,7 +160,8 @@ struct REPLView: View {
                             historyNext()
                         },
                         requestCompletions: { code, cursor in
-                            await node.completeInREPL(code: code, cursor: cursor)
+                            guard let node = engine.node(forSessionID: sessionID) else { return [] as [String] }
+                            return await node.completeInREPL(code: code, cursor: cursor)
                         }
                     )
                     .frame(minHeight: 22)
@@ -213,7 +218,7 @@ struct REPLView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Run")
-                .disabled(node == nil || !localUserIsDriver)
+                .disabled(!canSubmit)
             }
             .padding(.horizontal, horizontalInset)
             .padding(.vertical, 8)
@@ -271,7 +276,7 @@ struct REPLView: View {
             return
         }
 
-        if !engine.localUserHosts(sessionID) {
+        if !engine.isHostingNode(sessionID) {
             let cellID = UUID()
             let placeholder = LumaCore.REPLCell(
                 id: cellID,

@@ -63,14 +63,12 @@ final class REPLPane {
     func applySessionState() {
         guard let engine else { return }
         let session = engine.sessions.first(where: { $0.id == sessionID })
-        let isAttached = engine.node(forSessionID: sessionID) != nil
+        let isLive = isLive(session: session, engine: engine)
         let localIsDriver = engine.localUserIsDriver(ofSessionID: sessionID)
-        let canType = isAttached && localIsDriver
+        let canType = isLive && (localIsDriver || engine.collaboration.isOwner)
 
         let placeholder: String
-        if let driver = engine.driver(forSessionID: sessionID), !localIsDriver {
-            placeholder = "Driving: @\(driver.id)"
-        } else if isAttached {
+        if isLive {
             placeholder = "Enter JavaScript\u{2026}"
         } else if let session {
             placeholder = inactiveMessage(for: session)
@@ -80,6 +78,13 @@ final class REPLPane {
         console.setInputEnabled(canType, placeholder: placeholder)
 
         updateBanner(for: session, engine: engine)
+    }
+
+    private func isLive(session: LumaCore.ProcessSession?, engine: Engine) -> Bool {
+        guard let session else { return false }
+        if engine.node(forSessionID: sessionID) != nil { return true }
+        if session.host != nil, session.phase == .attached { return true }
+        return false
     }
 
     func focusInput() {
@@ -174,7 +179,7 @@ final class REPLPane {
 
     private func submit(code: String) {
         guard let engine else { return }
-        if !engine.localUserHosts(sessionID) {
+        if !engine.isHostingNode(sessionID) {
             let cellID = UUID()
             let placeholder = LumaCore.REPLCell(
                 id: cellID,
