@@ -83,7 +83,12 @@ final class REPLPane {
     private func isLive(session: LumaCore.ProcessSession?, engine: Engine) -> Bool {
         guard let session else { return false }
         if engine.node(forSessionID: sessionID) != nil { return true }
-        if session.host != nil, session.phase == .attached { return true }
+        if let host = session.host,
+           host.id != engine.collaboration.localUser?.id,
+           session.phase == .attached || session.phase == .attaching
+        {
+            return true
+        }
         return false
     }
 
@@ -151,12 +156,10 @@ final class REPLPane {
             return "Armed but inactive — resume spawn gating to capture launches."
         }
         if let host = session.host,
+           host.id != engine?.collaboration.localUser?.id,
            engine?.node(forSessionID: session.id) == nil,
            session.phase == .attached || session.phase == .attaching
         {
-            if host.id == engine?.collaboration.localUser?.id {
-                return "Hosted by you on \(session.deviceName) — REPL runs on the hosting device."
-            }
             return "Hosted by @\(host.id) on \(session.deviceName) — REPL runs on the hosting device."
         }
         if session.lastAttachedAt != nil {

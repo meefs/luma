@@ -46,7 +46,8 @@ struct SessionContent<Content: View>: View {
         if !isAttached,
            !hasError,
            engine.collaboration.isCollaborative,
-           session.host != nil,
+           let host = session.host,
+           host.id != engine.collaboration.localUser?.id,
            session.phase == .attached || session.phase == .attaching
         {
             return .none

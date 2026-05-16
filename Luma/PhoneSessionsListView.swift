@@ -425,6 +425,14 @@ struct PhoneSessionRow: View {
         return "Hosted by @\(host.id) on \(session.deviceName)"
     }
 
+    private var isHostedRemotelyLive: Bool {
+        guard let host = session.host,
+              host.id != engine.collaboration.localUser?.id,
+              !engine.isHostingNode(session.id)
+        else { return false }
+        return session.phase == .attached || session.phase == .attaching
+    }
+
     @ViewBuilder
     private var icon: some View {
         if let data = session.iconPNGData {
@@ -443,7 +451,9 @@ struct PhoneSessionRow: View {
 
     @ViewBuilder
     private var statusBadge: some View {
-        if node == nil {
+        if isHostedRemotelyLive {
+            EmptyView()
+        } else if node == nil {
             Image(systemName: "bolt.slash")
                 .foregroundStyle(.orange)
                 .help("Detached")

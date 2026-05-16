@@ -436,9 +436,18 @@ private struct SidebarSessionHeaderRow: View {
 
     private var isDetached: Bool {
         guard node == nil, !isArmed else { return false }
+        if isHostedRemotelyLive { return false }
         if session.lastAttachedAt != nil { return true }
         if case .attach = session.kind { return true }
         return false
+    }
+
+    private var isHostedRemotelyLive: Bool {
+        guard let host = session.host,
+              host.id != engine.collaboration.localUser?.id,
+              !engine.isHostingNode(session.id)
+        else { return false }
+        return session.phase == .attached || session.phase == .attaching
     }
 
     @ViewBuilder
