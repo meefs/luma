@@ -90,6 +90,10 @@ struct TracerConfigView: View {
         .onChange(of: selectedHookID) {
             syncDraftWithSelection()
         }
+        .onChange(of: selectedHook?.code) { _, newCode in
+            guard !isDirty, let newCode, newCode != draftCode else { return }
+            draftCode = newCode
+        }
         .onChange(of: isShowingSearchPopover) { _, showing in
             if !showing {
                 searchTask?.cancel()

@@ -8,11 +8,11 @@ struct InstrumentDetailView: View {
     @Binding var selection: SidebarItemID?
 
     private var instance: LumaCore.InstrumentInstance? {
-        try? engine.store.fetchInstrument(id: instanceID)
+        engine.instrumentsBySession[sessionID]?.first(where: { $0.id == instanceID })
     }
 
     private var session: LumaCore.ProcessSession? {
-        try? engine.store.fetchSession(id: sessionID)
+        engine.sessions.first(where: { $0.id == sessionID })
     }
 
     private var configBinding: Binding<Data> {
