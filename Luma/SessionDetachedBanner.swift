@@ -15,6 +15,8 @@ struct SessionContent<Content: View>: View {
             switch bannerState {
             case .armed(let session):
                 SessionArmedBanner(session: session, engine: engine)
+            case .hostedElsewhere(let session):
+                SessionHostedElsewhereBanner(session: session, engine: engine)
             case .detached(let session):
                 SessionDetachedBanner(session: session, engine: engine)
             case .idle(let session):
@@ -28,6 +30,7 @@ struct SessionContent<Content: View>: View {
 
     private enum BannerState {
         case armed(LumaCore.ProcessSession)
+        case hostedElsewhere(LumaCore.ProcessSession)
         case detached(LumaCore.ProcessSession)
         case idle(LumaCore.ProcessSession)
         case none
@@ -45,6 +48,14 @@ struct SessionContent<Content: View>: View {
         let hasError = session.lastError != nil
         if isAttached && !hasError {
             return .none
+        }
+        if !isAttached,
+           !hasError,
+           engine.collaboration.isCollaborative,
+           session.host != nil,
+           session.phase == .attached || session.phase == .attaching
+        {
+            return .hostedElsewhere(session)
         }
         if session.lastAttachedAt != nil {
             return .detached(session)
@@ -288,6 +299,63 @@ struct SessionDetachedBanner: View {
     }
 
     private func reestablish() {
+        Task { @MainActor in
+            let result = await engine.reestablishSession(id: session.id)
+            if case .needsUserInput(let reason, let session) = result {
+                picker.context = .reestablish(session: session, reason: reason)
+            }
+        }
+    }
+}
+
+struct SessionHostedElsewhereBanner: View {
+    let session: LumaCore.ProcessSession
+    let engine: Engine
+
+    @Environment(TargetPicker.self) private var picker
+
+    var body: some View {
+        LumaBanner(style: .info) {
+            HStack {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: "person.2.wave.2")
+                        .font(.headline)
+                    Text(session.processName)
+                        .font(.headline)
+                    Divider()
+                        .frame(height: 16)
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    takeOver()
+                } label: {
+                    Label("Take Over Here…", systemImage: "arrow.right.arrow.left")
+                }
+                .disabled(session.phase == .attaching)
+                .buttonStyle(.bordered)
+                .font(.caption)
+            }
+        }
+    }
+
+    private var statusText: String {
+        let deviceName = session.deviceName
+        let host = session.host
+        if let host, host.id == engine.collaboration.localUser?.id {
+            return "Hosted by you on \(deviceName)."
+        }
+        if let host {
+            return "Hosted by @\(host.id) on \(deviceName)."
+        }
+        return "Hosted on \(deviceName)."
+    }
+
+    private func takeOver() {
         Task { @MainActor in
             let result = await engine.reestablishSession(id: session.id)
             if case .needsUserInput(let reason, let session) = result {
