@@ -33,7 +33,7 @@ struct CustomInstrumentCompatibilityPopover: View {
             }
         }
         .padding(12)
-        .frame(width: 480)
+        .popoverFormSheet(width: 480)
         .onAppear { syncDraft() }
     }
 

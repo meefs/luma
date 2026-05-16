@@ -518,7 +518,7 @@ struct CustomInstrumentRenamePopover: View {
             }
         }
         .padding(12)
-        .frame(width: 360)
+        .popoverFormSheet(width: 360)
         .onAppear {
             draftName = def.name
             draftIcon = def.icon

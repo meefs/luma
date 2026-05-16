@@ -35,13 +35,6 @@ struct PhoneSessionsListView: View {
                 }
                 Section {
                     Button {
-                        isShowingCustomInstruments = true
-                    } label: {
-                        Label("Custom Instruments\u{2026}", systemImage: "hammer")
-                    }
-                }
-                Section {
-                    Button {
                         documentActions.new()
                     } label: {
                         Label("New Document", systemImage: "doc.badge.plus")
@@ -76,6 +69,15 @@ struct PhoneSessionsListView: View {
                     .frame(width: 36, height: 36)
             }
             .accessibilityLabel("Missions")
+
+            Button {
+                isShowingCustomInstruments = true
+            } label: {
+                Image(systemName: "hammer")
+                    .font(.title3)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Custom Instruments")
 
             Spacer()
 

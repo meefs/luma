@@ -127,8 +127,11 @@ struct CustomInstrumentEditorView: View {
                 engine: engine,
                 selection: $selection
             )
+            .font(.title3)
+            .frame(width: 36, height: 36)
         }
-        .padding(.horizontal, 8)
+        .padding(.leading, 8)
+        .padding(.trailing, 12)
         .padding(.bottom, 6)
     }
 
@@ -263,7 +266,7 @@ struct CustomInstrumentFeaturesPopover: View {
             }
         }
         .padding(12)
-        .frame(width: 520)
+        .popoverFormSheet(width: 520)
         .onAppear { draftFeatures = def.features }
     }
 

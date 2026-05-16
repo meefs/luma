@@ -44,7 +44,7 @@ struct CustomInstrumentWidgetsPopover: View {
             }
         }
         .padding(12)
-        .frame(width: 520)
+        .popoverFormSheet(width: 520)
         .onAppear { draftWidgets = def.widgets }
     }
 

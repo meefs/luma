@@ -174,9 +174,12 @@ private struct ProjectContentView: View {
                     .frame(minWidth: 560)
 
                 if engine.projectUIState.isCollaborationPanelVisible {
-                    CollaborationPanel(engine: engine)
-                        .frame(minWidth: 260, idealWidth: 300, maxWidth: 520)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    HStack(spacing: 0) {
+                        Divider()
+                        CollaborationPanel(engine: engine)
+                    }
+                    .frame(minWidth: 260, idealWidth: 300, maxWidth: 520)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
         #else
