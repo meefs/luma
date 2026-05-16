@@ -2924,6 +2924,18 @@ public final class Engine {
         for widget in persistentWidgets {
             let state = states[widget.id] ?? WidgetState()
             switch widget.kind {
+            case .counter:
+                if let counter = state.counter {
+                    var obj: [String: Any] = ["value": counter.value]
+                    if let unit = counter.unit { obj["unit"] = unit }
+                    if let delta = counter.delta { obj["delta"] = delta }
+                    restored[widget.id] = ["counter": obj]
+                } else {
+                    restored[widget.id] = ["counter": NSNull()]
+                }
+            case .histogram:
+                let buckets = state.histogram.map { ["label": $0.label, "count": $0.count] }
+                restored[widget.id] = ["buckets": buckets]
             case .graph:
                 let points = state.graphSeries.flatMap { (seriesID, pts) -> [[String: Any]] in
                     pts.map { ["series": seriesID, "x": $0.x, "y": $0.y] }
@@ -2942,18 +2954,6 @@ public final class Engine {
                     ["id": row.id, "cells": row.cells]
                 }
                 restored[widget.id] = ["rows": rows]
-            case .counter:
-                if let counter = state.counter {
-                    var obj: [String: Any] = ["value": counter.value]
-                    if let unit = counter.unit { obj["unit"] = unit }
-                    if let delta = counter.delta { obj["delta"] = delta }
-                    restored[widget.id] = ["counter": obj]
-                } else {
-                    restored[widget.id] = ["counter": NSNull()]
-                }
-            case .histogram:
-                let buckets = state.histogram.map { ["label": $0.label, "count": $0.count] }
-                restored[widget.id] = ["buckets": buckets]
             case .hex:
                 if let hex = state.hex {
                     restored[widget.id] = [
@@ -2965,6 +2965,8 @@ public final class Engine {
                 } else {
                     restored[widget.id] = ["hex": NSNull()]
                 }
+            case .console:
+                restored[widget.id] = ["entries": state.consoleEntries.map { $0.toWireJSON() }]
             }
         }
         return restored
@@ -3288,6 +3290,26 @@ public final class Engine {
 
         if origin == .local, let collabSID = collabSessionID(forSessionID: sessionID) {
             collaboration.sendWidgetUpdate(sessionID: collabSID, update: update)
+        }
+    }
+
+    public func submitConsoleInput(
+        instance: InstrumentInstance,
+        widget: String,
+        text: String
+    ) async {
+        let entry = WidgetConsoleEntry(kind: .input, text: text)
+        let update = WidgetUpdate(instanceID: instance.id, widget: widget, kind: .consoleAppend(entry))
+        applyWidgetUpdate(update, sessionID: instance.sessionID, origin: .local)
+
+        guard localUserHosts(instance.sessionID) else { return }
+        guard let node = node(forSessionID: instance.sessionID),
+            node.instruments.first(where: { $0.id == instance.id })?.attachment == .attached
+        else { return }
+        do {
+            try await node.submitConsoleInput(instanceID: instance.id, widget: widget, entryID: entry.id, text: text)
+        } catch {
+            emitEngineError(subsystem: "instruments", text: "Failed to submit console input on \(widget): \(userFacingMessage(error))")
         }
     }
 

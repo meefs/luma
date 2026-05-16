@@ -2423,6 +2423,12 @@ public enum MissionTools {
             else { return nil }
             let persistence = (obj["persistence"] as? String).flatMap(InstrumentWidget.Persistence.init(rawValue:)) ?? .none
             switch kindStr {
+            case "counter":
+                let cfg = InstrumentWidget.CounterConfig(unit: obj["unit"] as? String)
+                return InstrumentWidget(id: id, name: name, kind: .counter(cfg), persistence: persistence)
+            case "histogram":
+                let maxBuckets = (obj["max_buckets"] as? Int) ?? InstrumentWidget.HistogramConfig.defaultMaxBuckets
+                return InstrumentWidget(id: id, name: name, kind: .histogram(InstrumentWidget.HistogramConfig(maxBuckets: max(1, maxBuckets))), persistence: persistence)
             case "graph":
                 let cfg = parseGraphConfigArg(seriesRaw: obj["series"], maxPointsRaw: obj["max_points"])
                 return InstrumentWidget(id: id, name: name, kind: .graph(cfg), persistence: persistence)
@@ -2432,12 +2438,6 @@ public enum MissionTools {
             case "table":
                 let cfg = parseTableConfigArg(columnsRaw: obj["columns"], actionsRaw: obj["actions"], maxRowsRaw: obj["max_rows"])
                 return InstrumentWidget(id: id, name: name, kind: .table(cfg), persistence: persistence)
-            case "counter":
-                let cfg = InstrumentWidget.CounterConfig(unit: obj["unit"] as? String)
-                return InstrumentWidget(id: id, name: name, kind: .counter(cfg), persistence: persistence)
-            case "histogram":
-                let maxBuckets = (obj["max_buckets"] as? Int) ?? InstrumentWidget.HistogramConfig.defaultMaxBuckets
-                return InstrumentWidget(id: id, name: name, kind: .histogram(InstrumentWidget.HistogramConfig(maxBuckets: max(1, maxBuckets))), persistence: persistence)
             case "hex":
                 let maxBytes = (obj["max_bytes"] as? Int) ?? InstrumentWidget.HexConfig.defaultMaxBytes
                 return InstrumentWidget(id: id, name: name, kind: .hex(InstrumentWidget.HexConfig(maxBytes: max(1, maxBytes))), persistence: persistence)
@@ -2541,6 +2541,12 @@ public enum MissionTools {
             "persistence": widget.persistence.rawValue,
         ]
         switch widget.kind {
+        case .counter(let cfg):
+            obj["kind"] = "counter"
+            if let unit = cfg.unit { obj["unit"] = unit }
+        case .histogram(let cfg):
+            obj["kind"] = "histogram"
+            obj["max_buckets"] = cfg.maxBuckets
         case .graph(let cfg):
             obj["kind"] = "graph"
             obj["series"] = cfg.series.map { ["id": $0.id, "name": $0.name] }
@@ -2554,15 +2560,15 @@ public enum MissionTools {
             obj["columns"] = cfg.columns.map { ["id": $0.id, "name": $0.name, "alignment": $0.alignment.rawValue] }
             obj["actions"] = cfg.actions.map { ["id": $0.id, "name": $0.name] }
             obj["max_rows"] = cfg.maxRows
-        case .counter(let cfg):
-            obj["kind"] = "counter"
-            if let unit = cfg.unit { obj["unit"] = unit }
-        case .histogram(let cfg):
-            obj["kind"] = "histogram"
-            obj["max_buckets"] = cfg.maxBuckets
         case .hex(let cfg):
             obj["kind"] = "hex"
             obj["max_bytes"] = cfg.maxBytes
+        case .console(let cfg):
+            obj["kind"] = "console"
+            if let prompt = cfg.prompt { obj["prompt"] = prompt }
+            if let placeholder = cfg.placeholder { obj["placeholder"] = placeholder }
+            if let label = cfg.runButtonLabel { obj["run_button_label"] = label }
+            obj["max_entries"] = cfg.maxEntries
         }
         return obj
     }

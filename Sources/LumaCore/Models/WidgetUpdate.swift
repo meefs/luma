@@ -14,15 +14,16 @@ public struct WidgetUpdate: Sendable, Identifiable {
     }
 
     public enum Kind: Sendable {
+        case counterSet(WidgetCounterValue)
+        case histogramSet([WidgetHistogramBucket])
+        case histogramIncrement(label: String, by: Double)
         case graphPoint(WidgetGraphPoint)
         case listUpsert(WidgetListItem)
         case listRemove(itemID: String)
         case tableUpsert(WidgetTableRow)
         case tableRemove(rowID: String)
-        case counterSet(WidgetCounterValue)
-        case histogramSet([WidgetHistogramBucket])
-        case histogramIncrement(label: String, by: Double)
         case hexSet(WidgetHexState)
+        case consoleAppend(WidgetConsoleEntry)
         case clear
     }
 
@@ -32,6 +33,19 @@ public struct WidgetUpdate: Sendable, Identifiable {
             "widget": widget,
         ]
         switch kind {
+        case .counterSet(let value):
+            obj["kind"] = "counter-set"
+            var counter: [String: Any] = ["value": value.value]
+            if let unit = value.unit { counter["unit"] = unit }
+            if let delta = value.delta { counter["delta"] = delta }
+            obj["counter"] = counter
+        case .histogramSet(let buckets):
+            obj["kind"] = "histogram-set"
+            obj["buckets"] = buckets.map { ["label": $0.label, "count": $0.count] }
+        case .histogramIncrement(let label, let by):
+            obj["kind"] = "histogram-increment"
+            obj["label"] = label
+            obj["by"] = by
         case .graphPoint(let point):
             obj["kind"] = "graph-point"
             obj["point"] = ["series": point.series, "x": point.x, "y": point.y]
@@ -50,25 +64,15 @@ public struct WidgetUpdate: Sendable, Identifiable {
         case .tableRemove(let rowID):
             obj["kind"] = "table-remove"
             obj["row"] = rowID
-        case .counterSet(let value):
-            obj["kind"] = "counter-set"
-            var counter: [String: Any] = ["value": value.value]
-            if let unit = value.unit { counter["unit"] = unit }
-            if let delta = value.delta { counter["delta"] = delta }
-            obj["counter"] = counter
-        case .histogramSet(let buckets):
-            obj["kind"] = "histogram-set"
-            obj["buckets"] = buckets.map { ["label": $0.label, "count": $0.count] }
-        case .histogramIncrement(let label, let by):
-            obj["kind"] = "histogram-increment"
-            obj["label"] = label
-            obj["by"] = by
         case .hexSet(let state):
             obj["kind"] = "hex-set"
             obj["hex"] = [
                 "bytes": state.bytes.base64EncodedString(),
                 "base_address": state.baseAddress,
             ]
+        case .consoleAppend(let entry):
+            obj["kind"] = "console-append"
+            obj["entry"] = entry.toWireJSON()
         case .clear:
             obj["kind"] = "clear"
         }
@@ -87,6 +91,25 @@ public struct WidgetUpdate: Sendable, Identifiable {
 
     private static func decodeKind(_ kindStr: String, from obj: [String: Any]) -> Kind? {
         switch kindStr {
+        case "counter-set":
+            guard let counter = obj["counter"] as? [String: Any],
+                let value = decodeDouble(counter["value"])
+            else { return nil }
+            return .counterSet(WidgetCounterValue(
+                value: value,
+                unit: counter["unit"] as? String,
+                delta: decodeDouble(counter["delta"])
+            ))
+        case "histogram-set":
+            guard let buckets = obj["buckets"] as? [[String: Any]] else { return nil }
+            let parsed = buckets.compactMap { b -> WidgetHistogramBucket? in
+                guard let label = b["label"] as? String, let count = decodeDouble(b["count"]) else { return nil }
+                return WidgetHistogramBucket(label: label, count: count)
+            }
+            return .histogramSet(parsed)
+        case "histogram-increment":
+            guard let label = obj["label"] as? String, let by = decodeDouble(obj["by"]) else { return nil }
+            return .histogramIncrement(label: label, by: by)
         case "graph-point":
             guard let pointObj = obj["point"] as? [String: Any],
                 let series = pointObj["series"] as? String,
@@ -117,25 +140,6 @@ public struct WidgetUpdate: Sendable, Identifiable {
         case "table-remove":
             guard let rowID = obj["row"] as? String else { return nil }
             return .tableRemove(rowID: rowID)
-        case "counter-set":
-            guard let counter = obj["counter"] as? [String: Any],
-                let value = decodeDouble(counter["value"])
-            else { return nil }
-            return .counterSet(WidgetCounterValue(
-                value: value,
-                unit: counter["unit"] as? String,
-                delta: decodeDouble(counter["delta"])
-            ))
-        case "histogram-set":
-            guard let buckets = obj["buckets"] as? [[String: Any]] else { return nil }
-            let parsed = buckets.compactMap { b -> WidgetHistogramBucket? in
-                guard let label = b["label"] as? String, let count = decodeDouble(b["count"]) else { return nil }
-                return WidgetHistogramBucket(label: label, count: count)
-            }
-            return .histogramSet(parsed)
-        case "histogram-increment":
-            guard let label = obj["label"] as? String, let by = decodeDouble(obj["by"]) else { return nil }
-            return .histogramIncrement(label: label, by: by)
         case "hex-set":
             guard let hex = obj["hex"] as? [String: Any],
                 let b64 = hex["bytes"] as? String,
@@ -143,6 +147,11 @@ public struct WidgetUpdate: Sendable, Identifiable {
             else { return nil }
             let baseAddress: UInt64 = (hex["base_address"] as? NSNumber)?.uint64Value ?? 0
             return .hexSet(WidgetHexState(bytes: bytes, baseAddress: baseAddress))
+        case "console-append":
+            guard let entryObj = obj["entry"] as? [String: Any],
+                let entry = WidgetConsoleEntry.fromWireJSON(entryObj)
+            else { return nil }
+            return .consoleAppend(entry)
         case "clear":
             return .clear
         default:
@@ -153,6 +162,28 @@ public struct WidgetUpdate: Sendable, Identifiable {
     private static func decodeDouble(_ raw: Any?) -> Double? {
         if let n = raw as? NSNumber { return n.doubleValue }
         return nil
+    }
+}
+
+public struct WidgetCounterValue: Codable, Sendable, Equatable {
+    public var value: Double
+    public var unit: String?
+    public var delta: Double?
+
+    public init(value: Double, unit: String? = nil, delta: Double? = nil) {
+        self.value = value
+        self.unit = unit
+        self.delta = delta
+    }
+}
+
+public struct WidgetHistogramBucket: Codable, Sendable, Equatable {
+    public let label: String
+    public var count: Double
+
+    public init(label: String, count: Double) {
+        self.label = label
+        self.count = count
     }
 }
 
@@ -192,28 +223,6 @@ public struct WidgetTableRow: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
-public struct WidgetCounterValue: Codable, Sendable, Equatable {
-    public var value: Double
-    public var unit: String?
-    public var delta: Double?
-
-    public init(value: Double, unit: String? = nil, delta: Double? = nil) {
-        self.value = value
-        self.unit = unit
-        self.delta = delta
-    }
-}
-
-public struct WidgetHistogramBucket: Codable, Sendable, Equatable {
-    public let label: String
-    public var count: Double
-
-    public init(label: String, count: Double) {
-        self.label = label
-        self.count = count
-    }
-}
-
 public struct WidgetHexState: Codable, Sendable, Equatable {
     public var bytes: Data
     public var baseAddress: UInt64
@@ -221,6 +230,41 @@ public struct WidgetHexState: Codable, Sendable, Equatable {
     public init(bytes: Data, baseAddress: UInt64 = 0) {
         self.bytes = bytes
         self.baseAddress = baseAddress
+    }
+}
+
+public struct WidgetConsoleEntry: Codable, Sendable, Equatable, Identifiable {
+    public enum Kind: String, Codable, Sendable {
+        case input
+        case output
+        case error
+    }
+
+    public let id: String
+    public let kind: Kind
+    public var text: String
+
+    public init(id: String = UUID().uuidString, kind: Kind, text: String) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+    }
+
+    public func toWireJSON() -> [String: Any] {
+        [
+            "id": id,
+            "kind": kind.rawValue,
+            "text": text,
+        ]
+    }
+
+    public static func fromWireJSON(_ obj: [String: Any]) -> WidgetConsoleEntry? {
+        guard let id = obj["id"] as? String,
+            let kindStr = obj["kind"] as? String,
+            let kind = Kind(rawValue: kindStr),
+            let text = obj["text"] as? String
+        else { return nil }
+        return WidgetConsoleEntry(id: id, kind: kind, text: text)
     }
 }
 
@@ -245,6 +289,23 @@ public struct WidgetStateSnapshot: Sendable {
             let widget = obj["widget"] as? String,
             let stateObj = obj["state"] as? [String: Any]
         else { return nil }
+
+        var counter: WidgetCounterValue?
+        if let c = stateObj["counter"] as? [String: Any], let value = (c["value"] as? NSNumber)?.doubleValue {
+            counter = WidgetCounterValue(
+                value: value,
+                unit: c["unit"] as? String,
+                delta: (c["delta"] as? NSNumber)?.doubleValue
+            )
+        }
+
+        var histogram: [WidgetHistogramBucket] = []
+        if let buckets = stateObj["buckets"] as? [[String: Any]] {
+            for b in buckets {
+                guard let label = b["label"] as? String, let count = (b["count"] as? NSNumber)?.doubleValue else { continue }
+                histogram.append(WidgetHistogramBucket(label: label, count: count))
+            }
+        }
 
         var graphSeries: [String: [WidgetGraphPoint]] = [:]
         if let pts = stateObj["points"] as? [[String: Any]] {
@@ -278,23 +339,6 @@ public struct WidgetStateSnapshot: Sendable {
             }
         }
 
-        var counter: WidgetCounterValue?
-        if let c = stateObj["counter"] as? [String: Any], let value = (c["value"] as? NSNumber)?.doubleValue {
-            counter = WidgetCounterValue(
-                value: value,
-                unit: c["unit"] as? String,
-                delta: (c["delta"] as? NSNumber)?.doubleValue
-            )
-        }
-
-        var histogram: [WidgetHistogramBucket] = []
-        if let buckets = stateObj["buckets"] as? [[String: Any]] {
-            for b in buckets {
-                guard let label = b["label"] as? String, let count = (b["count"] as? NSNumber)?.doubleValue else { continue }
-                histogram.append(WidgetHistogramBucket(label: label, count: count))
-            }
-        }
-
         var hex: WidgetHexState?
         if let h = stateObj["hex"] as? [String: Any],
             let b64 = h["bytes"] as? String,
@@ -306,48 +350,71 @@ public struct WidgetStateSnapshot: Sendable {
             )
         }
 
+        var consoleEntries: [WidgetConsoleEntry] = []
+        if let entries = stateObj["entries"] as? [[String: Any]] {
+            for e in entries {
+                if let parsed = WidgetConsoleEntry.fromWireJSON(e) {
+                    consoleEntries.append(parsed)
+                }
+            }
+        }
+
         return WidgetStateSnapshot(
             sessionID: sessionID,
             instanceID: instanceID,
             widget: widget,
             state: WidgetState(
+                counter: counter,
+                histogram: histogram,
                 graphSeries: graphSeries,
                 listItems: listItems,
                 tableRows: tableRows,
-                counter: counter,
-                histogram: histogram,
-                hex: hex
+                hex: hex,
+                consoleEntries: consoleEntries
             )
         )
     }
 }
 
 public struct WidgetState: Codable, Sendable, Equatable {
+    public var counter: WidgetCounterValue?
+    public var histogram: [WidgetHistogramBucket]
     public var graphSeries: [String: [WidgetGraphPoint]]
     public var listItems: [WidgetListItem]
     public var tableRows: [WidgetTableRow]
-    public var counter: WidgetCounterValue?
-    public var histogram: [WidgetHistogramBucket]
     public var hex: WidgetHexState?
+    public var consoleEntries: [WidgetConsoleEntry]
 
     public init(
+        counter: WidgetCounterValue? = nil,
+        histogram: [WidgetHistogramBucket] = [],
         graphSeries: [String: [WidgetGraphPoint]] = [:],
         listItems: [WidgetListItem] = [],
         tableRows: [WidgetTableRow] = [],
-        counter: WidgetCounterValue? = nil,
-        histogram: [WidgetHistogramBucket] = [],
-        hex: WidgetHexState? = nil
+        hex: WidgetHexState? = nil,
+        consoleEntries: [WidgetConsoleEntry] = []
     ) {
+        self.counter = counter
+        self.histogram = histogram
         self.graphSeries = graphSeries
         self.listItems = listItems
         self.tableRows = tableRows
-        self.counter = counter
-        self.histogram = histogram
         self.hex = hex
+        self.consoleEntries = consoleEntries
     }
 
     public mutating func apply(_ kind: WidgetUpdate.Kind) {
         switch kind {
+        case .counterSet(let value):
+            counter = value
+        case .histogramSet(let buckets):
+            histogram = buckets
+        case .histogramIncrement(let label, let by):
+            if let index = histogram.firstIndex(where: { $0.label == label }) {
+                histogram[index].count += by
+            } else {
+                histogram.append(WidgetHistogramBucket(label: label, count: by))
+            }
         case .graphPoint(let point):
             graphSeries[point.series, default: []].append(point)
         case .listUpsert(let item):
@@ -366,30 +433,29 @@ public struct WidgetState: Codable, Sendable, Equatable {
             }
         case .tableRemove(let id):
             tableRows.removeAll { $0.id == id }
-        case .counterSet(let value):
-            counter = value
-        case .histogramSet(let buckets):
-            histogram = buckets
-        case .histogramIncrement(let label, let by):
-            if let index = histogram.firstIndex(where: { $0.label == label }) {
-                histogram[index].count += by
-            } else {
-                histogram.append(WidgetHistogramBucket(label: label, count: by))
-            }
         case .hexSet(let value):
             hex = value
+        case .consoleAppend(let entry):
+            consoleEntries.append(entry)
         case .clear:
+            counter = nil
+            histogram.removeAll()
             graphSeries.removeAll()
             listItems.removeAll()
             tableRows.removeAll()
-            counter = nil
-            histogram.removeAll()
             hex = nil
+            consoleEntries.removeAll()
         }
     }
 
     public mutating func cap(to kind: InstrumentWidget.Kind) {
         switch kind {
+        case .counter:
+            break
+        case .histogram(let cfg):
+            if histogram.count > cfg.maxBuckets {
+                histogram = Array(histogram.suffix(cfg.maxBuckets))
+            }
         case .graph(let cfg):
             for (seriesID, points) in graphSeries where points.count > cfg.maxPoints {
                 graphSeries[seriesID] = Array(points.suffix(cfg.maxPoints))
@@ -402,12 +468,6 @@ public struct WidgetState: Codable, Sendable, Equatable {
             if tableRows.count > cfg.maxRows {
                 tableRows = Array(tableRows.suffix(cfg.maxRows))
             }
-        case .counter:
-            break
-        case .histogram(let cfg):
-            if histogram.count > cfg.maxBuckets {
-                histogram = Array(histogram.suffix(cfg.maxBuckets))
-            }
         case .hex(let cfg):
             if let h = hex, h.bytes.count > cfg.maxBytes {
                 let drop = h.bytes.count - cfg.maxBytes
@@ -415,6 +475,10 @@ public struct WidgetState: Codable, Sendable, Equatable {
                     bytes: h.bytes.suffix(cfg.maxBytes),
                     baseAddress: h.baseAddress &+ UInt64(drop)
                 )
+            }
+        case .console(let cfg):
+            if consoleEntries.count > cfg.maxEntries {
+                consoleEntries = Array(consoleEntries.suffix(cfg.maxEntries))
             }
         }
     }

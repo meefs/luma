@@ -647,35 +647,39 @@ public enum CustomInstrumentTypings {
 
     private static func widgetType(for kind: InstrumentWidget.Kind) -> String {
         switch kind {
+        case .counter:
+            return "CustomInstrumentCounterWidget"
+        case .histogram:
+            return "CustomInstrumentHistogramWidget"
         case .graph(let cfg):
             return "CustomInstrumentGraphWidget<\(stringLiteralUnion(cfg.series.map(\.id)))>"
         case .list(let cfg):
             return "CustomInstrumentListWidget<\(stringLiteralUnion(cfg.actions.map(\.id)))>"
         case .table(let cfg):
             return "CustomInstrumentTableWidget<\(stringLiteralUnion(cfg.columns.map(\.id))), \(stringLiteralUnion(cfg.actions.map(\.id)))>"
-        case .counter:
-            return "CustomInstrumentCounterWidget"
-        case .histogram:
-            return "CustomInstrumentHistogramWidget"
         case .hex:
             return "CustomInstrumentHexWidget"
+        case .console:
+            return "CustomInstrumentConsoleWidget"
         }
     }
 
     private static func snapshotType(for kind: InstrumentWidget.Kind) -> String {
         switch kind {
+        case .counter:
+            return "CustomInstrumentCounterSnapshot"
+        case .histogram:
+            return "CustomInstrumentHistogramSnapshot"
         case .graph(let cfg):
             return "CustomInstrumentGraphSnapshot<\(stringLiteralUnion(cfg.series.map(\.id)))>"
         case .list:
             return "CustomInstrumentListSnapshot"
         case .table(let cfg):
             return "CustomInstrumentTableSnapshot<\(stringLiteralUnion(cfg.columns.map(\.id)))>"
-        case .counter:
-            return "CustomInstrumentCounterSnapshot"
-        case .histogram:
-            return "CustomInstrumentHistogramSnapshot"
         case .hex:
             return "CustomInstrumentHexSnapshot"
+        case .console:
+            return "CustomInstrumentConsoleSnapshot"
         }
     }
 

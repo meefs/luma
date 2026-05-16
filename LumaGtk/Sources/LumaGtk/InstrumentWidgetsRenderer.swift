@@ -32,6 +32,9 @@ final class InstrumentWidgetsRenderer {
                 },
                 onClear: { [weak self] in
                     self?.clear(widget: definition.id)
+                },
+                onConsoleSubmit: { [weak self] text in
+                    self?.submitConsole(widget: definition.id, text: text)
                 }
             )
             canvases.append(canvas)
@@ -72,6 +75,14 @@ final class InstrumentWidgetsRenderer {
     private func clear(widget: String) {
         engine?.clearWidget(instance: instance, widget: widget)
     }
+
+    private func submitConsole(widget: String, text: String) {
+        guard let engine else { return }
+        let instance = self.instance
+        Task { @MainActor in
+            await engine.submitConsoleInput(instance: instance, widget: widget, text: text)
+        }
+    }
 }
 
 @MainActor
@@ -79,18 +90,20 @@ private final class WidgetCanvas {
     let definition: InstrumentWidget
     let widget: Box
     private let onAction: (_ action: String, _ item: String?) -> Void
+    private var counterView: CounterView?
+    private var histogramView: HistogramView?
     private var graphView: GraphView?
     private var listView: ListView?
     private var tableView: TableView?
-    private var counterView: CounterView?
-    private var histogramView: HistogramView?
     private var hexView: HexValueView?
+    private var consoleWidget: ConsoleWidget?
 
     init(
         definition: InstrumentWidget,
         snapshot: WidgetState,
         onAction: @escaping (_ action: String, _ item: String?) -> Void,
-        onClear: @escaping () -> Void
+        onClear: @escaping () -> Void,
+        onConsoleSubmit: @escaping (_ text: String) -> Void
     ) {
         self.definition = definition
         self.onAction = onAction
@@ -122,6 +135,14 @@ private final class WidgetCanvas {
         column.append(child: header)
 
         switch definition.kind {
+        case .counter(let cfg):
+            let view = CounterView(unit: cfg.unit, initial: snapshot.counter)
+            counterView = view
+            column.append(child: view.widget)
+        case .histogram:
+            let view = HistogramView(initial: snapshot.histogram)
+            histogramView = view
+            column.append(child: view.widget)
         case .graph(let cfg):
             let view = GraphView(series: cfg.series, initialSeries: snapshot.graphSeries)
             graphView = view
@@ -134,23 +155,25 @@ private final class WidgetCanvas {
             let view = TableView(columns: cfg.columns, actions: cfg.actions, initialRows: snapshot.tableRows, onAction: onAction)
             tableView = view
             column.append(child: view.widget)
-        case .counter(let cfg):
-            let view = CounterView(unit: cfg.unit, initial: snapshot.counter)
-            counterView = view
-            column.append(child: view.widget)
-        case .histogram:
-            let view = HistogramView(initial: snapshot.histogram)
-            histogramView = view
-            column.append(child: view.widget)
         case .hex:
             let view = HexValueView(initial: snapshot.hex)
             hexView = view
+            column.append(child: view.widget)
+        case .console(let cfg):
+            let view = ConsoleWidget(config: cfg, initialEntries: snapshot.consoleEntries, onSubmit: onConsoleSubmit)
+            consoleWidget = view
             column.append(child: view.widget)
         }
     }
 
     func apply(_ update: WidgetUpdate) {
         switch update.kind {
+        case .counterSet(let value):
+            counterView?.set(value: value)
+        case .histogramSet(let buckets):
+            histogramView?.setBuckets(buckets)
+        case .histogramIncrement(let label, let by):
+            histogramView?.increment(label: label, by: by)
         case .graphPoint(let point):
             graphView?.append(point: point)
         case .listUpsert(let item):
@@ -161,22 +184,102 @@ private final class WidgetCanvas {
             tableView?.upsert(row: row)
         case .tableRemove(let id):
             tableView?.remove(rowID: id)
-        case .counterSet(let value):
-            counterView?.set(value: value)
-        case .histogramSet(let buckets):
-            histogramView?.setBuckets(buckets)
-        case .histogramIncrement(let label, let by):
-            histogramView?.increment(label: label, by: by)
         case .hexSet(let state):
             hexView?.set(state: state)
+        case .consoleAppend(let entry):
+            consoleWidget?.append(entry: entry)
         case .clear:
+            counterView?.clear()
+            histogramView?.clear()
             graphView?.clear()
             listView?.clear()
             tableView?.clear()
-            counterView?.clear()
-            histogramView?.clear()
             hexView?.clear()
+            consoleWidget?.clear()
         }
+    }
+}
+
+@MainActor
+private final class ConsoleWidget {
+    let widget: Box
+    private let console: ConsoleView
+
+    init(
+        config: InstrumentWidget.ConsoleConfig,
+        initialEntries: [WidgetConsoleEntry],
+        onSubmit: @escaping (_ text: String) -> Void
+    ) {
+        let style = ConsoleView.Style(
+            promptGlyph: config.prompt ?? "\u{203A}",
+            placeholder: config.placeholder ?? "",
+            runButtonLabel: config.runButtonLabel ?? "Run"
+        )
+        console = ConsoleView(style: style, emptyState: Self.makeEmptyState())
+        console.onSubmit = onSubmit
+        widget = Box(orientation: .vertical, spacing: 0)
+        widget.hexpand = true
+        widget.setSizeRequest(width: -1, height: 280)
+        widget.append(child: console.widget)
+
+        var seededHistory: [String] = []
+        for entry in initialEntries {
+            console.appendEntry(Self.makeRow(for: entry))
+            if entry.kind == .input { seededHistory.append(entry.text) }
+        }
+        console.setHistory(seededHistory)
+    }
+
+    func append(entry: WidgetConsoleEntry) {
+        console.appendEntry(Self.makeRow(for: entry))
+    }
+
+    func clear() {
+        console.clearEntries()
+        console.setHistory([])
+    }
+
+    private static func makeRow(for entry: WidgetConsoleEntry) -> Widget {
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let glyph: String
+        let bodyCssClass: String?
+        switch entry.kind {
+        case .input:
+            glyph = "\u{203A}"
+            bodyCssClass = nil
+        case .output:
+            glyph = "\u{2190}"
+            bodyCssClass = nil
+        case .error:
+            glyph = "!"
+            bodyCssClass = "error"
+        }
+        let glyphLabel = Label(str: glyph)
+        glyphLabel.add(cssClass: "monospace")
+        glyphLabel.add(cssClass: "dim-label")
+        glyphLabel.valign = .start
+        row.append(child: glyphLabel)
+        let body = Label(str: entry.text)
+        body.add(cssClass: "monospace")
+        if let cssClass = bodyCssClass { body.add(cssClass: cssClass) }
+        body.halign = .start
+        body.hexpand = true
+        body.wrap = true
+        body.selectable = true
+        row.append(child: body)
+        return row
+    }
+
+    private static func makeEmptyState() -> Widget {
+        let box = Box(orientation: .vertical, spacing: 8)
+        box.halign = .center
+        box.valign = .center
+        box.marginTop = 16
+        box.marginBottom = 16
+        let label = Label(str: "Awaiting input\u{2026}")
+        label.add(cssClass: "dim-label")
+        box.append(child: label)
+        return box
     }
 }
 

@@ -26,12 +26,31 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
     }
 
     public enum Kind: Sendable, Equatable {
+        case counter(CounterConfig)
+        case histogram(HistogramConfig)
         case graph(GraphConfig)
         case list(ListConfig)
         case table(TableConfig)
-        case counter(CounterConfig)
-        case histogram(HistogramConfig)
         case hex(HexConfig)
+        case console(ConsoleConfig)
+    }
+
+    public struct CounterConfig: Codable, Sendable, Equatable {
+        public var unit: String?
+
+        public init(unit: String? = nil) {
+            self.unit = unit
+        }
+    }
+
+    public struct HistogramConfig: Codable, Sendable, Equatable {
+        public static let defaultMaxBuckets: Int = 100
+
+        public var maxBuckets: Int
+
+        public init(maxBuckets: Int = Self.defaultMaxBuckets) {
+            self.maxBuckets = maxBuckets
+        }
     }
 
     public struct GraphConfig: Codable, Sendable, Equatable {
@@ -99,24 +118,6 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
         }
     }
 
-    public struct CounterConfig: Codable, Sendable, Equatable {
-        public var unit: String?
-
-        public init(unit: String? = nil) {
-            self.unit = unit
-        }
-    }
-
-    public struct HistogramConfig: Codable, Sendable, Equatable {
-        public static let defaultMaxBuckets: Int = 100
-
-        public var maxBuckets: Int
-
-        public init(maxBuckets: Int = Self.defaultMaxBuckets) {
-            self.maxBuckets = maxBuckets
-        }
-    }
-
     public struct HexConfig: Codable, Sendable, Equatable {
         public static let defaultMaxBytes: Int = 16_384
 
@@ -124,6 +125,27 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
 
         public init(maxBytes: Int = Self.defaultMaxBytes) {
             self.maxBytes = maxBytes
+        }
+    }
+
+    public struct ConsoleConfig: Codable, Sendable, Equatable {
+        public static let defaultMaxEntries: Int = 1_000
+
+        public var prompt: String?
+        public var placeholder: String?
+        public var runButtonLabel: String?
+        public var maxEntries: Int
+
+        public init(
+            prompt: String? = nil,
+            placeholder: String? = nil,
+            runButtonLabel: String? = nil,
+            maxEntries: Int = Self.defaultMaxEntries
+        ) {
+            self.prompt = prompt
+            self.placeholder = placeholder
+            self.runButtonLabel = runButtonLabel
+            self.maxEntries = maxEntries
         }
     }
 
@@ -140,29 +162,37 @@ public struct InstrumentWidget: Codable, Identifiable, Sendable, Equatable {
 
 extension InstrumentWidget.Kind: Codable {
     private enum CodingKeys: String, CodingKey { case kind, config }
-    private enum Tag: String, Codable { case graph, list, table, counter, histogram, hex }
+    private enum Tag: String, Codable { case counter, histogram, graph, list, table, hex, console }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Tag.self, forKey: .kind) {
+        case .counter:
+            self = .counter(try c.decode(InstrumentWidget.CounterConfig.self, forKey: .config))
+        case .histogram:
+            self = .histogram(try c.decode(InstrumentWidget.HistogramConfig.self, forKey: .config))
         case .graph:
             self = .graph(try c.decode(InstrumentWidget.GraphConfig.self, forKey: .config))
         case .list:
             self = .list(try c.decode(InstrumentWidget.ListConfig.self, forKey: .config))
         case .table:
             self = .table(try c.decode(InstrumentWidget.TableConfig.self, forKey: .config))
-        case .counter:
-            self = .counter(try c.decode(InstrumentWidget.CounterConfig.self, forKey: .config))
-        case .histogram:
-            self = .histogram(try c.decode(InstrumentWidget.HistogramConfig.self, forKey: .config))
         case .hex:
             self = .hex(try c.decode(InstrumentWidget.HexConfig.self, forKey: .config))
+        case .console:
+            self = .console(try c.decode(InstrumentWidget.ConsoleConfig.self, forKey: .config))
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .counter(let cfg):
+            try c.encode(Tag.counter, forKey: .kind)
+            try c.encode(cfg, forKey: .config)
+        case .histogram(let h):
+            try c.encode(Tag.histogram, forKey: .kind)
+            try c.encode(h, forKey: .config)
         case .graph(let g):
             try c.encode(Tag.graph, forKey: .kind)
             try c.encode(g, forKey: .config)
@@ -172,15 +202,12 @@ extension InstrumentWidget.Kind: Codable {
         case .table(let t):
             try c.encode(Tag.table, forKey: .kind)
             try c.encode(t, forKey: .config)
-        case .counter(let cfg):
-            try c.encode(Tag.counter, forKey: .kind)
-            try c.encode(cfg, forKey: .config)
-        case .histogram(let h):
-            try c.encode(Tag.histogram, forKey: .kind)
-            try c.encode(h, forKey: .config)
         case .hex(let h):
             try c.encode(Tag.hex, forKey: .kind)
             try c.encode(h, forKey: .config)
+        case .console(let cfg):
+            try c.encode(Tag.console, forKey: .kind)
+            try c.encode(cfg, forKey: .config)
         }
     }
 }

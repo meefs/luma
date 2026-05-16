@@ -391,6 +391,21 @@ public final class ProcessNode: Identifiable {
 
                 return true
 
+            case "widget-counter-set":
+                guard let update = decodeCounterSetUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-histogram-set":
+                guard let update = decodeHistogramSetUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-histogram-increment":
+                guard let update = decodeHistogramIncrementUpdate(dict) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
             case "widget-graph-point":
                 guard let update = decodeGraphPointUpdate(dict) else { return false }
                 _widgetUpdates.yield(update)
@@ -416,23 +431,13 @@ public final class ProcessNode: Identifiable {
                 _widgetUpdates.yield(update)
                 return true
 
-            case "widget-counter-set":
-                guard let update = decodeCounterSetUpdate(dict) else { return false }
-                _widgetUpdates.yield(update)
-                return true
-
-            case "widget-histogram-set":
-                guard let update = decodeHistogramSetUpdate(dict) else { return false }
-                _widgetUpdates.yield(update)
-                return true
-
-            case "widget-histogram-increment":
-                guard let update = decodeHistogramIncrementUpdate(dict) else { return false }
-                _widgetUpdates.yield(update)
-                return true
-
             case "widget-hex-set":
                 guard let update = decodeHexSetUpdate(dict, data: data) else { return false }
+                _widgetUpdates.yield(update)
+                return true
+
+            case "widget-console-append":
+                guard let update = decodeConsoleAppendUpdate(dict) else { return false }
                 _widgetUpdates.yield(update)
                 return true
 
@@ -472,6 +477,47 @@ public final class ProcessNode: Identifiable {
     }
 
     // MARK: - Widget Updates
+
+    private func decodeCounterSetUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let counterObj = dict["counter"] as? [String: Any],
+            let value = decodeNumber(counterObj["value"])
+        else { return nil }
+        return WidgetUpdate(
+            instanceID: context.instanceID,
+            widget: context.widget,
+            kind: .counterSet(WidgetCounterValue(
+                value: value,
+                unit: counterObj["unit"] as? String,
+                delta: decodeNumber(counterObj["delta"])
+            ))
+        )
+    }
+
+    private func decodeHistogramSetUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let bucketArr = dict["buckets"] as? [[String: Any]]
+        else { return nil }
+        let buckets = bucketArr.compactMap { obj -> WidgetHistogramBucket? in
+            guard let label = obj["label"] as? String,
+                let count = decodeNumber(obj["count"])
+            else { return nil }
+            return WidgetHistogramBucket(label: label, count: count)
+        }
+        return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .histogramSet(buckets))
+    }
+
+    private func decodeHistogramIncrementUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let label = dict["label"] as? String,
+            let by = decodeNumber(dict["by"])
+        else { return nil }
+        return WidgetUpdate(
+            instanceID: context.instanceID,
+            widget: context.widget,
+            kind: .histogramIncrement(label: label, by: by)
+        )
+    }
 
     private func decodeGraphPointUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
         guard let context = decodeWidgetContext(dict),
@@ -526,47 +572,6 @@ public final class ProcessNode: Identifiable {
         return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .tableRemove(rowID: rowID))
     }
 
-    private func decodeCounterSetUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
-        guard let context = decodeWidgetContext(dict),
-            let counterObj = dict["counter"] as? [String: Any],
-            let value = decodeNumber(counterObj["value"])
-        else { return nil }
-        return WidgetUpdate(
-            instanceID: context.instanceID,
-            widget: context.widget,
-            kind: .counterSet(WidgetCounterValue(
-                value: value,
-                unit: counterObj["unit"] as? String,
-                delta: decodeNumber(counterObj["delta"])
-            ))
-        )
-    }
-
-    private func decodeHistogramSetUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
-        guard let context = decodeWidgetContext(dict),
-            let bucketArr = dict["buckets"] as? [[String: Any]]
-        else { return nil }
-        let buckets = bucketArr.compactMap { obj -> WidgetHistogramBucket? in
-            guard let label = obj["label"] as? String,
-                let count = decodeNumber(obj["count"])
-            else { return nil }
-            return WidgetHistogramBucket(label: label, count: count)
-        }
-        return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .histogramSet(buckets))
-    }
-
-    private func decodeHistogramIncrementUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
-        guard let context = decodeWidgetContext(dict),
-            let label = dict["label"] as? String,
-            let by = decodeNumber(dict["by"])
-        else { return nil }
-        return WidgetUpdate(
-            instanceID: context.instanceID,
-            widget: context.widget,
-            kind: .histogramIncrement(label: label, by: by)
-        )
-    }
-
     private func decodeHexSetUpdate(_ dict: [String: Any], data: [UInt8]?) -> WidgetUpdate? {
         guard let context = decodeWidgetContext(dict) else { return nil }
         let bytes: Data
@@ -585,6 +590,14 @@ public final class ProcessNode: Identifiable {
             widget: context.widget,
             kind: .hexSet(WidgetHexState(bytes: bytes, baseAddress: baseAddress))
         )
+    }
+
+    private func decodeConsoleAppendUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
+        guard let context = decodeWidgetContext(dict),
+            let entryObj = dict["entry"] as? [String: Any],
+            let entry = WidgetConsoleEntry.fromWireJSON(entryObj)
+        else { return nil }
+        return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .consoleAppend(entry))
     }
 
     private func decodeClearUpdate(_ dict: [String: Any]) -> WidgetUpdate? {
@@ -1078,6 +1091,15 @@ public final class ProcessNode: Identifiable {
         ]
         if let item { payload["item"] = item }
         _ = try await script.exports.invokeWidgetAction(JSValue(payload))
+    }
+
+    public func submitConsoleInput(instanceID: UUID, widget: String, entryID: String, text: String) async throws {
+        try await script.exports.submitConsoleInput(JSValue([
+            "instanceId": instanceID.uuidString,
+            "widget": widget,
+            "entryId": entryID,
+            "text": text,
+        ]))
     }
 
     // MARK: - ITrace Orchestration

@@ -16,16 +16,30 @@ export interface InstrumentContext {
 }
 
 export interface WidgetHandle {
+    setCounter(value: CounterValue): void;
+    setHistogram(buckets: HistogramBucket[]): void;
+    incrementBucket(label: string, by?: number): void;
     push(point: GraphPoint): void;
     upsertItem(item: ListItem): void;
     removeItem(id: string): void;
     upsertRow(row: TableRow): void;
     removeRow(id: string): void;
-    setCounter(value: CounterValue): void;
-    setHistogram(buckets: HistogramBucket[]): void;
-    incrementBucket(label: string, by?: number): void;
     setHex(state: HexValue): void;
+    appendConsole(entry: ConsoleEntry): void;
+    appendOutput(text: string): void;
+    appendError(text: string): void;
     clear(): void;
+}
+
+export interface CounterValue {
+    value: number;
+    unit?: string;
+    delta?: number;
+}
+
+export interface HistogramBucket {
+    label: string;
+    count: number;
 }
 
 export interface GraphPoint {
@@ -46,20 +60,21 @@ export interface TableRow {
     cells: { [columnId: string]: string };
 }
 
-export interface CounterValue {
-    value: number;
-    unit?: string;
-    delta?: number;
-}
-
-export interface HistogramBucket {
-    label: string;
-    count: number;
-}
-
 export interface HexValue {
     bytes: ArrayBuffer | number[];
     baseAddress?: number | string;
+}
+
+export interface ConsoleEntry {
+    id?: string;
+    kind: "input" | "output" | "error";
+    text: string;
+}
+
+export interface ConsoleInput {
+    widget: string;
+    entryId: string;
+    text: string;
 }
 
 export interface WidgetAction {
@@ -71,6 +86,7 @@ export interface WidgetAction {
 export interface InstrumentHandle<C = unknown> {
     updateConfig?(config: C): Promise<void> | void;
     onAction?(action: WidgetAction): Promise<void> | void;
+    onConsoleInput?(input: ConsoleInput): Promise<void> | void;
     dispose?(): Promise<void> | void;
 }
 
@@ -147,6 +163,20 @@ export async function invokeWidgetAction({ instanceId, widget, action, item }: {
     await controller.handle.onAction?.({ widget, action, item });
 }
 
+export async function submitConsoleInput({ instanceId, widget, entryId, text }: {
+    instanceId: string,
+    widget: string,
+    entryId: string,
+    text: string,
+}): Promise<void> {
+    const controller = instruments.get(instanceId);
+    if (controller === undefined) {
+        throw new Error(`No such instance: ${instanceId}`);
+    }
+
+    await controller.handle.onConsoleInput?.({ widget, entryId, text });
+}
+
 function makeInstrumentContext(instanceId: string): InstrumentContext {
     const post = (type: string, payload: object, data?: ArrayBuffer | number[] | null) => {
         send({
@@ -168,6 +198,15 @@ function makeInstrumentContext(instanceId: string): InstrumentContext {
         post,
         widget(id: string): WidgetHandle {
             return {
+                setCounter(value) {
+                    post("widget-counter-set", { widget: id, counter: value });
+                },
+                setHistogram(buckets) {
+                    post("widget-histogram-set", { widget: id, buckets });
+                },
+                incrementBucket(label, by = 1) {
+                    post("widget-histogram-increment", { widget: id, label, by });
+                },
                 push(point) {
                     post("widget-graph-point", { widget: id, point });
                 },
@@ -183,18 +222,31 @@ function makeInstrumentContext(instanceId: string): InstrumentContext {
                 removeRow(rowId) {
                     post("widget-table-remove", { widget: id, row: rowId });
                 },
-                setCounter(value) {
-                    post("widget-counter-set", { widget: id, counter: value });
-                },
-                setHistogram(buckets) {
-                    post("widget-histogram-set", { widget: id, buckets });
-                },
-                incrementBucket(label, by = 1) {
-                    post("widget-histogram-increment", { widget: id, label, by });
-                },
                 setHex(state) {
                     const data = state.bytes instanceof ArrayBuffer ? state.bytes : new Uint8Array(state.bytes).buffer;
                     post("widget-hex-set", { widget: id, hex: { base_address: state.baseAddress ?? 0 } }, data);
+                },
+                appendConsole(entry) {
+                    post("widget-console-append", {
+                        widget: id,
+                        entry: {
+                            id: entry.id ?? makeId(),
+                            kind: entry.kind,
+                            text: entry.text,
+                        },
+                    });
+                },
+                appendOutput(text) {
+                    post("widget-console-append", {
+                        widget: id,
+                        entry: { id: makeId(), kind: "output", text },
+                    });
+                },
+                appendError(text) {
+                    post("widget-console-append", {
+                        widget: id,
+                        entry: { id: makeId(), kind: "error", text },
+                    });
                 },
                 clear() {
                     post("widget-clear", { widget: id });
@@ -227,4 +279,8 @@ function parseInstrumentModule(ns: unknown, name: string): Instrument {
         throw new Error(`Instrument module ${name} does not export a valid instrument`);
     }
     return instrument;
+}
+
+function makeId(): string {
+    return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 }

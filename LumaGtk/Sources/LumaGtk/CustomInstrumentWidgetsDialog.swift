@@ -286,18 +286,20 @@ final class CustomInstrumentWidgetsDialog {
         body.visible = isExpanded
         body.append(child: persistenceRow(widget: widget, index: index))
         switch widget.kind {
+        case .counter(let cfg):
+            body.append(child: counterEditor(initial: cfg, index: index))
+        case .histogram(let cfg):
+            body.append(child: histogramEditor(initial: cfg, index: index))
         case .graph(let cfg):
             body.append(child: graphSeriesEditor(initial: cfg.series, index: index))
         case .list(let cfg):
             body.append(child: listActionsEditor(initial: cfg.actions, index: index))
         case .table(let cfg):
             body.append(child: tableEditor(initial: cfg, index: index))
-        case .counter(let cfg):
-            body.append(child: counterEditor(initial: cfg, index: index))
-        case .histogram(let cfg):
-            body.append(child: histogramEditor(initial: cfg, index: index))
         case .hex(let cfg):
             body.append(child: hexEditor(initial: cfg, index: index))
+        case .console(let cfg):
+            body.append(child: consoleEditor(initial: cfg, index: index))
         }
         column.append(child: body)
 
@@ -896,6 +898,79 @@ final class CustomInstrumentWidgetsDialog {
         return row
     }
 
+    private func consoleEditor(initial: InstrumentWidget.ConsoleConfig, index: Int) -> Box {
+        let outer = Box(orientation: .vertical, spacing: 4)
+
+        outer.append(child: consoleStringRow(
+            title: "Prompt",
+            initial: initial.prompt ?? "",
+            index: index,
+            update: { cfg, text in cfg.prompt = text.isEmpty ? nil : text }
+        ))
+        outer.append(child: consoleStringRow(
+            title: "Placeholder",
+            initial: initial.placeholder ?? "",
+            index: index,
+            update: { cfg, text in cfg.placeholder = text.isEmpty ? nil : text }
+        ))
+        outer.append(child: consoleStringRow(
+            title: "Run label",
+            initial: initial.runButtonLabel ?? "",
+            index: index,
+            update: { cfg, text in cfg.runButtonLabel = text.isEmpty ? nil : text }
+        ))
+
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let label = Label(str: "Max entries")
+        label.halign = .start
+        label.setSizeRequest(width: 160, height: -1)
+        row.append(child: label)
+        let entry = Entry()
+        entry.text = String(initial.maxEntries)
+        entry.setSizeRequest(width: 120, height: -1)
+        entry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, index < self.draftWidgets.count,
+                    case .console(var cfg) = self.draftWidgets[index].kind,
+                    let value = Int(entry.text ?? ""), value >= 1
+                else { return }
+                cfg.maxEntries = value
+                self.draftWidgets[index].kind = .console(cfg)
+            }
+        }
+        row.append(child: entry)
+        outer.append(child: row)
+
+        return outer
+    }
+
+    private func consoleStringRow(
+        title: String,
+        initial: String,
+        index: Int,
+        update: @escaping (inout InstrumentWidget.ConsoleConfig, String) -> Void
+    ) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 8)
+        let label = Label(str: title)
+        label.halign = .start
+        label.setSizeRequest(width: 160, height: -1)
+        row.append(child: label)
+        let entry = Entry()
+        entry.text = initial
+        entry.setSizeRequest(width: 200, height: -1)
+        entry.onChanged { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, index < self.draftWidgets.count,
+                    case .console(var cfg) = self.draftWidgets[index].kind
+                else { return }
+                update(&cfg, entry.text ?? "")
+                self.draftWidgets[index].kind = .console(cfg)
+            }
+        }
+        row.append(child: entry)
+        return row
+    }
+
     private func hexEditor(initial: InstrumentWidget.HexConfig, index: Int) -> Box {
         let row = Box(orientation: .horizontal, spacing: 8)
         let label = Label(str: "Max bytes")
@@ -942,16 +1017,17 @@ final class CustomInstrumentWidgetsDialog {
 }
 
 enum WidgetKindChoice: CaseIterable {
-    case graph, list, table, counter, histogram, hex
+    case counter, histogram, graph, list, table, hex, console
 
     var label: String {
         switch self {
+        case .counter: return "Counter"
+        case .histogram: return "Histogram"
         case .graph: return "Graph"
         case .list: return "List"
         case .table: return "Table"
-        case .counter: return "Counter"
-        case .histogram: return "Histogram"
         case .hex: return "Hex Dump"
+        case .console: return "Console"
         }
     }
 
@@ -961,23 +1037,25 @@ enum WidgetKindChoice: CaseIterable {
 
     init(from kind: InstrumentWidget.Kind) {
         switch kind {
+        case .counter: self = .counter
+        case .histogram: self = .histogram
         case .graph: self = .graph
         case .list: self = .list
         case .table: self = .table
-        case .counter: self = .counter
-        case .histogram: self = .histogram
         case .hex: self = .hex
+        case .console: self = .console
         }
     }
 
     func defaultKind() -> InstrumentWidget.Kind {
         switch self {
+        case .counter: return .counter(InstrumentWidget.CounterConfig())
+        case .histogram: return .histogram(InstrumentWidget.HistogramConfig())
         case .graph: return .graph(InstrumentWidget.GraphConfig())
         case .list: return .list(InstrumentWidget.ListConfig())
         case .table: return .table(InstrumentWidget.TableConfig())
-        case .counter: return .counter(InstrumentWidget.CounterConfig())
-        case .histogram: return .histogram(InstrumentWidget.HistogramConfig())
         case .hex: return .hex(InstrumentWidget.HexConfig())
+        case .console: return .console(InstrumentWidget.ConsoleConfig())
         }
     }
 }
