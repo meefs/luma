@@ -199,6 +199,8 @@ private final class WidgetCanvas {
             hexView?.set(state: state)
         case .consoleAppend(let entry):
             consoleWidget?.append(entry: entry)
+        case .consoleReplyDone:
+            break
         case .clear:
             counterView?.clear()
             histogramView?.clear()
@@ -282,6 +284,9 @@ private final class ConsoleWidget {
 
     private func makeRow(for entry: WidgetConsoleEntry) -> Widget {
         let row = Box(orientation: .horizontal, spacing: 8)
+        if entry.replyTo != nil {
+            row.marginStart = 16
+        }
         let glyph: String
         let bodyCssClass: String?
         switch entry.kind {
