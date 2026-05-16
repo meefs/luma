@@ -111,15 +111,47 @@ final class MissionsListPane {
     }
 
     func updateMissions(_ missions: [Mission]) {
-        orderedMissions = missions
-        rowsByMissionID.removeAll()
-        listBox.removeAll()
-
         let isEmpty = missions.isEmpty
         newButton.visible = !isEmpty
         replaceBody(empty: isEmpty)
-        guard !isEmpty else { return }
+        diffMissionRows(missions)
+        orderedMissions = missions
+    }
 
+    private func diffMissionRows(_ missions: [Mission]) {
+        let previousByID = Dictionary(uniqueKeysWithValues: orderedMissions.map { ($0.id, $0) })
+        let nextIDs = Set(missions.map(\.id))
+
+        for id in rowsByMissionID.keys where !nextIDs.contains(id) {
+            if let row = rowsByMissionID.removeValue(forKey: id) {
+                listBox.remove(child: row)
+            }
+        }
+
+        let orderChanged = orderedMissions.map(\.id) != missions.map(\.id)
+        if orderChanged {
+            rebuildMissionRows(missions)
+            return
+        }
+
+        for (index, mission) in missions.enumerated() {
+            if let previous = previousByID[mission.id],
+                previous.updatedAt == mission.updatedAt,
+                rowsByMissionID[mission.id] != nil {
+                continue
+            }
+            if let stale = rowsByMissionID[mission.id] {
+                listBox.remove(child: stale)
+            }
+            let row = makeMissionRow(for: mission)
+            rowsByMissionID[mission.id] = row
+            listBox.insert(child: row, position: index)
+        }
+    }
+
+    private func rebuildMissionRows(_ missions: [Mission]) {
+        rowsByMissionID.removeAll()
+        listBox.removeAll()
         for mission in missions {
             let row = makeMissionRow(for: mission)
             rowsByMissionID[mission.id] = row

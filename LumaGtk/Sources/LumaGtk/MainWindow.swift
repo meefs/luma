@@ -38,6 +38,7 @@ final class MainWindow: InstrumentUIHost {
     private var isReconcilingSidebar: Bool = false
     private var missions: [Mission] = []
     private var missionRowIDs: [UUID] = []
+    private var missionSidebarRows: [UUID: ListBoxRow] = [:]
     private var currentMissionsListPane: MissionsListPane?
     private var currentMissionDetailPane: MissionDetailPane?
     private let detailContainer: Box
@@ -709,18 +710,9 @@ final class MainWindow: InstrumentUIHost {
 
     private func renderMissions(_ snapshot: [Mission]) {
         let visibleMissions = snapshot.filter { $0.providerID != "external" }
+        diffMissionSidebarRows(visibleMissions)
         missions = visibleMissions
         missionRowIDs = visibleMissions.map(\.id)
-
-        while let row = missionsListBox.getRowAt(index: 1) {
-            missionsListBox.remove(child: row)
-        }
-
-        for mission in visibleMissions {
-            let row = makeMissionSidebarRow(mission)
-            row.visible = missionsExpanded
-            missionsListBox.append(child: row)
-        }
 
         missionsExpansionButton.visible = !visibleMissions.isEmpty
 
@@ -732,6 +724,51 @@ final class MainWindow: InstrumentUIHost {
             } else {
                 select(.missionsList)
             }
+        }
+    }
+
+    private func diffMissionSidebarRows(_ missions: [Mission]) {
+        let previousByID = Dictionary(uniqueKeysWithValues: self.missions.map { ($0.id, $0) })
+        let nextIDs = Set(missions.map(\.id))
+
+        for id in missionSidebarRows.keys where !nextIDs.contains(id) {
+            if let row = missionSidebarRows.removeValue(forKey: id) {
+                missionsListBox.remove(child: row)
+            }
+        }
+
+        let orderChanged = self.missions.map(\.id) != missions.map(\.id)
+        if orderChanged {
+            rebuildMissionSidebarRows(missions)
+            return
+        }
+
+        for (index, mission) in missions.enumerated() {
+            if let previous = previousByID[mission.id],
+                previous.updatedAt == mission.updatedAt,
+                missionSidebarRows[mission.id] != nil {
+                continue
+            }
+            if let stale = missionSidebarRows[mission.id] {
+                missionsListBox.remove(child: stale)
+            }
+            let row = makeMissionSidebarRow(mission)
+            row.visible = missionsExpanded
+            missionSidebarRows[mission.id] = row
+            missionsListBox.insert(child: row, position: index + 1)
+        }
+    }
+
+    private func rebuildMissionSidebarRows(_ missions: [Mission]) {
+        while let row = missionsListBox.getRowAt(index: 1) {
+            missionsListBox.remove(child: row)
+        }
+        missionSidebarRows.removeAll()
+        for mission in missions {
+            let row = makeMissionSidebarRow(mission)
+            row.visible = missionsExpanded
+            missionSidebarRows[mission.id] = row
+            missionsListBox.append(child: row)
         }
     }
 
