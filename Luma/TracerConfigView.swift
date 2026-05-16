@@ -79,8 +79,8 @@ struct TracerConfigView: View {
             } else if let sel = selectedHookID,
                 !hooks.contains(where: { $0.id == sel })
             {
-                selectedHookID = isConfigOnlyContext ? hooks.first?.id : nil
-            } else if selectedHookID == nil, isConfigOnlyContext {
+                selectedHookID = (isConfigOnlyContext || isCompactWidth) ? hooks.first?.id : nil
+            } else if selectedHookID == nil, isConfigOnlyContext || isCompactWidth {
                 selectedHookID = hooks.first?.id
             }
         }
@@ -232,7 +232,7 @@ struct TracerConfigView: View {
         {
             return
         }
-        selectedHookID = isConfigOnlyContext ? config.hooks.first?.id : nil
+        selectedHookID = (isConfigOnlyContext || isCompactWidth) ? config.hooks.first?.id : nil
     }
 
     private func syncDraftWithSelection() {
@@ -296,27 +296,84 @@ struct TracerConfigView: View {
     }
 
     private var hookLayout: some View {
-        ZStack(alignment: .topTrailing) {
-            if selectedHook != nil {
-                HookEditorView(
-                    draftCode: $draftCode,
-                    isDirty: $isDirty,
-                    selectedHook: selectedHook,
-                    engine: engine,
-                )
-            } else {
-                Text("Select a hook to edit its script.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        VStack(spacing: 0) {
+            if isCompactWidth {
+                compactHookSwitcher
+                Divider()
             }
+            ZStack(alignment: .topTrailing) {
+                if selectedHook != nil {
+                    HookEditorView(
+                        draftCode: $draftCode,
+                        isDirty: $isDirty,
+                        selectedHook: selectedHook,
+                        engine: engine,
+                    )
+                } else {
+                    Text("Select a hook to edit its script.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
 
-            SaveBarOverlay(
-                isDirty: selectedHook != nil && isDirty,
-                showSavedCheck: selectedHook != nil && showSavedCheck,
-                saveTooltip: "Save current hook script (\u{2318}S)",
-                onSave: saveDraft
-            )
+                SaveBarOverlay(
+                    isDirty: selectedHook != nil && isDirty,
+                    showSavedCheck: selectedHook != nil && showSavedCheck,
+                    saveTooltip: "Save current hook script (\u{2318}S)",
+                    onSave: saveDraft
+                )
+            }
         }
+    }
+
+    private var compactHookSwitcher: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Picker("Hook", selection: hookPickerBinding) {
+                    ForEach(config.hooksByMostRecentlyEdited(), id: \.id) { hook in
+                        Text(hook.displayName).tag(hook.id as UUID?)
+                    }
+                }
+                if let hook = selectedHook {
+                    Divider()
+                    Button(role: .destructive) {
+                        hookToDelete = hook
+                        showDeleteConfirmation = true
+                    } label: {
+                        Label("Delete Hook", systemImage: "trash")
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedHook?.displayName ?? "Select a hook")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            addHookButton
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var hookPickerBinding: Binding<UUID?> {
+        Binding(
+            get: { selectedHookID },
+            set: { newValue in
+                guard let newValue, newValue != selectedHookID else { return }
+                if isDirty {
+                    pendingSelectionID = newValue
+                    showUnsavedChangesAlert = true
+                } else {
+                    selectedHookID = newValue
+                }
+            }
+        )
     }
 
     private var addHookButton: some View {
@@ -327,16 +384,40 @@ struct TracerConfigView: View {
         }
         .help("Add hooks by searching functions")
         .popover(isPresented: $isShowingSearchPopover) {
-            searchSection
-                .frame(
-                    width: isCompactWidth ? nil : 520,
-                    height: isCompactWidth ? nil : 400,
-                    alignment: .top
-                )
-                .padding(12)
+            #if canImport(UIKit)
+            if isCompactWidth {
+                NavigationStack {
+                    VStack(alignment: .leading, spacing: 0) {
+                        searchSection
+                        Spacer(minLength: 0)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .navigationTitle("Add Hook")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { isShowingSearchPopover = false }
+                        }
+                    }
+                }
                 .id("tracer.searchPopover")
                 .transaction { $0.animation = nil }
+            } else {
+                desktopSearchPopover
+            }
+            #else
+            desktopSearchPopover
+            #endif
         }
+    }
+
+    private var desktopSearchPopover: some View {
+        searchSection
+            .frame(width: 520, height: 400, alignment: .top)
+            .padding(12)
+            .id("tracer.searchPopover")
+            .transaction { $0.animation = nil }
     }
 
     private var searchSection: some View {
