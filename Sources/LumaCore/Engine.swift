@@ -982,7 +982,10 @@ public final class Engine {
             Task { @MainActor in self?.notebookEntries = entries }
         }
         instrumentsObservation = store.observeAllInstruments { [weak self] grouped in
-            Task { @MainActor in self?.instrumentsBySession = grouped }
+            Task { @MainActor in
+                self?.instrumentsBySession = grouped
+                self?.hydrateWidgetStatesFromStore(grouped)
+            }
         }
         insightsObservation = store.observeAllInsights { [weak self] grouped in
             Task { @MainActor in self?.insightsBySession = grouped }
@@ -2992,6 +2995,43 @@ public final class Engine {
 
     public func widgetState(instanceID: UUID, widget: String) -> WidgetState {
         widgetStates[instanceID]?[widget] ?? WidgetState()
+    }
+
+    private func hydrateWidgetStatesFromStore(_ grouped: [UUID: [InstrumentInstance]]) {
+        for instances in grouped.values {
+            for instance in instances {
+                guard widgetStates[instance.id] == nil else { continue }
+                let widgets = widgets(forInstance: instance)
+                let persistent = widgets.filter { $0.persistence == .session }
+                guard !persistent.isEmpty else { continue }
+                let states = (try? store.fetchWidgetStates(instanceID: instance.id)) ?? [:]
+                let persistentIDs = Set(persistent.map(\.id))
+                let filtered = states.filter { persistentIDs.contains($0.key) }
+                widgetStates[instance.id] = filtered
+                for widget in persistent {
+                    let state = filtered[widget.id] ?? WidgetState()
+                    _widgetUpdates.yield(WidgetUpdate(
+                        instanceID: instance.id,
+                        widget: widget.id,
+                        kind: .snapshot(state)
+                    ))
+                }
+            }
+        }
+    }
+
+    private func widgets(forInstance instance: InstrumentInstance) -> [InstrumentWidget] {
+        switch instance.kind {
+        case .custom:
+            guard let defID = UUID(uuidString: instance.sourceIdentifier),
+                let def = customInstruments.def(withId: defID)
+            else { return [] }
+            return def.widgets
+        case .hookPack:
+            return hookPacks.pack(withId: instance.sourceIdentifier)?.manifest.widgets ?? []
+        default:
+            return []
+        }
     }
 
     private func compileTypeScriptInstrument(
