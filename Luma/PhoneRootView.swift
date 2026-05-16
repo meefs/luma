@@ -222,6 +222,134 @@ struct PhoneMissionsSheet: View {
     }
 }
 
+struct PhoneCustomInstrumentsSheet: View {
+    let engine: Engine
+    @Environment(\.dismiss) private var dismiss
+    @State private var path: [CustomInstrumentRoute] = []
+
+    enum CustomInstrumentRoute: Hashable {
+        case file(UUID, String?)
+    }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            CustomInstrumentsBrowser(
+                engine: engine,
+                onPick: { defID, entrypoint in
+                    path.append(.file(defID, entrypoint))
+                },
+                onCreate: { def in
+                    path.append(.file(def.id, def.entrypoint))
+                }
+            )
+            .navigationTitle("Custom Instruments")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .navigationDestination(for: CustomInstrumentRoute.self) { route in
+                switch route {
+                case .file(let defID, let filePath):
+                    CustomInstrumentEditorView(
+                        defID: defID,
+                        path: filePath,
+                        engine: engine,
+                        selection: Binding(
+                            get: { nil },
+                            set: { newValue in
+                                guard let newValue else { return }
+                                switch newValue {
+                                case .customInstrumentFile(let id, let p):
+                                    path.append(.file(id, p))
+                                case .customInstrumentDef(let id):
+                                    path.append(.file(id, nil))
+                                default:
+                                    break
+                                }
+                            }
+                        )
+                    )
+                    .navigationTitle(engine.customInstruments.def(withId: defID)?.name ?? "Custom Instrument")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+        }
+    }
+}
+
+private struct CustomInstrumentsBrowser: View {
+    let engine: Engine
+    let onPick: (UUID, String) -> Void
+    let onCreate: (CustomInstrumentDef) -> Void
+
+    private var defs: [CustomInstrumentDef] { engine.customInstruments.defs }
+
+    var body: some View {
+        Group {
+            if defs.isEmpty {
+                ContentUnavailableView {
+                    Label("No custom instruments yet", systemImage: "hammer")
+                } description: {
+                    Text("Create one to write inline TypeScript that runs in the target.")
+                } actions: {
+                    Button {
+                        createNew()
+                    } label: {
+                        Label("New Custom Instrument", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            } else {
+                List {
+                    ForEach(defs) { def in
+                        Button {
+                            onPick(def.id, def.entrypoint)
+                        } label: {
+                            HStack(spacing: 12) {
+                                InstrumentIconView(icon: def.icon, pointSize: 18)
+                                    .frame(width: 28, height: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(def.name).font(.body)
+                                    Text(def.entrypoint)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .listStyle(.plain)
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            createNew()
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("New Custom Instrument")
+                    }
+                }
+            }
+        }
+    }
+
+    private func createNew() {
+        let def = engine.createCustomInstrument()
+        onCreate(def)
+    }
+}
+
 struct PhoneDocumentActions {
     let currentDisplayName: String
     let new: () -> Void

@@ -18,6 +18,7 @@ struct PhoneSessionsListView: View {
     @State private var pendingDeleteSession: LumaCore.ProcessSession?
     @State private var isShowingNotebook = false
     @State private var isShowingMissions = false
+    @State private var isShowingCustomInstruments = false
     @State private var isShowingHostingBlockedAlert = false
 
     private var sessions: [LumaCore.ProcessSession] { engine.sessions }
@@ -30,6 +31,13 @@ struct PhoneSessionsListView: View {
                         documentActions.saveAs()
                     } label: {
                         Label("Save a Copy\u{2026}", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Section {
+                    Button {
+                        isShowingCustomInstruments = true
+                    } label: {
+                        Label("Custom Instruments\u{2026}", systemImage: "hammer")
                     }
                 }
                 Section {
@@ -113,6 +121,9 @@ struct PhoneSessionsListView: View {
         }
         .sheet(isPresented: $isShowingMissions) {
             PhoneMissionsSheet(engine: engine)
+        }
+        .sheet(isPresented: $isShowingCustomInstruments) {
+            PhoneCustomInstrumentsSheet(engine: engine)
         }
         .sheet(
                 item: Binding(

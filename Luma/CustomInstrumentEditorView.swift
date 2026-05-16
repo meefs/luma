@@ -54,26 +54,30 @@ struct CustomInstrumentEditorView: View {
 
     @ViewBuilder
     private func content(def: CustomInstrumentDef, file: CustomInstrumentFile) -> some View {
-        ZStack(alignment: .topTrailing) {
-            CodeEditorView(
-                text: $draftContent,
-                profile: EditorProfile.fridaCustomInstrument(
-                    packages: engine.installedPackages,
-                    def: def,
-                    files: engine.customInstruments.files(forDefID: defID),
-                    activePath: CustomInstrumentFile.workspaceRelativePath(defID: defID, path: file.path)
-                ),
-                focused: $isEditorFocused,
-                engine: engine,
-            )
-            .accessibilityIdentifier("customInstrument.editor")
+        VStack(alignment: .leading, spacing: 0) {
+            header(def: def, file: file)
 
-            SaveBarOverlay(
-                isDirty: isDirty,
-                showSavedCheck: showSavedCheck,
-                saveTooltip: "Save current file (\u{2318}S)",
-                onSave: saveDraft
-            )
+            ZStack(alignment: .topTrailing) {
+                CodeEditorView(
+                    text: $draftContent,
+                    profile: EditorProfile.fridaCustomInstrument(
+                        packages: engine.installedPackages,
+                        def: def,
+                        files: engine.customInstruments.files(forDefID: defID),
+                        activePath: CustomInstrumentFile.workspaceRelativePath(defID: defID, path: file.path)
+                    ),
+                    focused: $isEditorFocused,
+                    engine: engine,
+                )
+                .accessibilityIdentifier("customInstrument.editor")
+
+                SaveBarOverlay(
+                    isDirty: isDirty,
+                    showSavedCheck: showSavedCheck,
+                    saveTooltip: "Save current file (\u{2318}S)",
+                    onSave: saveDraft
+                )
+            }
         }
         .padding(.top, 8)
         .padding(.leading, 8)
@@ -103,6 +107,29 @@ struct CustomInstrumentEditorView: View {
                 pendingPath = nil
             }
         )
+    }
+
+    private func header(def: CustomInstrumentDef, file: CustomInstrumentFile) -> some View {
+        HStack(spacing: 8) {
+            InstrumentIconView(icon: def.icon, pointSize: 14)
+            Text(def.name)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(file.path)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            CustomInstrumentMetadataMenu(
+                defID: defID,
+                engine: engine,
+                selection: $selection
+            )
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
     }
 
     private func handleNavigationRequest(toPath newPath: String?) {
