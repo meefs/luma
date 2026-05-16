@@ -46,6 +46,7 @@ public final class ProcessNode: Identifiable {
         public var state: InstrumentState
         public var attachment: AttachmentState
         public var status: InstrumentStatus?
+        public var componentStatuses: [UUID: InstrumentStatus]
 
         public init(
             id: UUID,
@@ -54,7 +55,8 @@ public final class ProcessNode: Identifiable {
             configJSON: Data,
             state: InstrumentState = .enabled,
             attachment: AttachmentState = .detached,
-            status: InstrumentStatus? = nil
+            status: InstrumentStatus? = nil,
+            componentStatuses: [UUID: InstrumentStatus] = [:]
         ) {
             self.id = id
             self.kind = kind
@@ -63,6 +65,7 @@ public final class ProcessNode: Identifiable {
             self.state = state
             self.attachment = attachment
             self.status = status
+            self.componentStatuses = componentStatuses
         }
     }
 
@@ -1029,6 +1032,12 @@ public final class ProcessNode: Identifiable {
     public func clearInstrumentStatus(id: UUID) {
         if let i = instruments.firstIndex(where: { $0.id == id }) {
             instruments[i].status = nil
+        }
+    }
+
+    public func replaceComponentStatuses(instrumentID: UUID, _ statuses: [UUID: InstrumentStatus]) {
+        if let i = instruments.firstIndex(where: { $0.id == instrumentID }) {
+            instruments[i].componentStatuses = statuses
         }
     }
 

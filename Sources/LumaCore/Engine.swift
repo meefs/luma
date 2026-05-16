@@ -2270,7 +2270,11 @@ public final class Engine {
             do {
                 let paths = try compilerWorkspacePaths()
                 configObject = try await compileTracerConfig(config, paths: paths)
+                node.replaceComponentStatuses(instrumentID: inst.id, [:])
                 broadcastInstrumentStatus(instanceID: inst.id, sessionID: node.sessionID)
+            } catch let failures as TracerHookCompileFailures {
+                applyHookCompileFailures(failures, on: node, instrumentID: inst.id)
+                return
             } catch {
                 node.setInstrumentStatus(id: inst.id, .from(error: error, kind: .configInvalid))
                 broadcastInstrumentStatus(instanceID: inst.id, sessionID: node.sessionID)
@@ -2362,11 +2366,25 @@ public final class Engine {
             }
 
             node.markInstrumentAttached(id: instanceID)
+            node.replaceComponentStatuses(instrumentID: instanceID, [:])
             broadcastInstrumentStatus(instanceID: instanceID, sessionID: node.sessionID)
+        } catch let failures as TracerHookCompileFailures {
+            applyHookCompileFailures(failures, on: node, instrumentID: instanceID)
         } catch {
             node.setInstrumentStatus(id: instanceID, .from(error: error, kind: .load))
             broadcastInstrumentStatus(instanceID: instanceID, sessionID: node.sessionID)
         }
+    }
+
+    private func applyHookCompileFailures(
+        _ failures: TracerHookCompileFailures,
+        on node: ProcessNode,
+        instrumentID: UUID
+    ) {
+        let statuses = failures.hookErrors.mapValues { InstrumentStatus.from(error: $0, kind: .configInvalid) }
+        node.clearInstrumentStatus(id: instrumentID)
+        node.replaceComponentStatuses(instrumentID: instrumentID, statuses)
+        broadcastInstrumentStatus(instanceID: instrumentID, sessionID: node.sessionID)
     }
 
     private func skipIfIncompatible(
@@ -2661,29 +2679,41 @@ public final class Engine {
     ) async throws -> JSONObject {
         _ = try await compilerWorkspace.ensureReady(paths: paths)
 
-        let results: [(Int, String, TracerConfig.Hook)] =
-            try await withThrowingTaskGroup(
-                of: (Int, String, TracerConfig.Hook).self
-            ) { group in
+        let outcomes: [(Int, TracerConfig.Hook, Result<String, Swift.Error>)] =
+            await withTaskGroup(of: (Int, TracerConfig.Hook, Result<String, Swift.Error>).self) { group in
                 for (index, hook) in config.hooks.enumerated() {
                     group.addTask {
-                        let js = try await self.compileTracerHook(
-                            id: hook.id,
-                            displayName: hook.displayName,
-                            tsSource: hook.code,
-                            paths: paths
-                        )
-                        return (index, js, hook)
+                        do {
+                            let js = try await self.compileTracerHook(
+                                id: hook.id,
+                                displayName: hook.displayName,
+                                tsSource: hook.code,
+                                paths: paths
+                            )
+                            return (index, hook, .success(js))
+                        } catch {
+                            return (index, hook, .failure(error))
+                        }
                     }
                 }
-
-                var out: [(Int, String, TracerConfig.Hook)] = []
+                var out: [(Int, TracerConfig.Hook, Result<String, Swift.Error>)] = []
                 out.reserveCapacity(config.hooks.count)
-                for try await item in group {
-                    out.append(item)
-                }
+                for await item in group { out.append(item) }
                 return out
             }
+
+        var hookErrors: [UUID: any Swift.Error] = [:]
+        var results: [(Int, String, TracerConfig.Hook)] = []
+        for (index, hook, outcome) in outcomes {
+            switch outcome {
+            case .success(let js): results.append((index, js, hook))
+            case .failure(let error): hookErrors[hook.id] = error
+            }
+        }
+
+        guard hookErrors.isEmpty else {
+            throw TracerHookCompileFailures(hookErrors: hookErrors)
+        }
 
         var hooksJSON: [JSONObject] = []
         hooksJSON.reserveCapacity(results.count)
@@ -4212,6 +4242,10 @@ public final class Engine {
             try? store.save(a.evidence)
         }
     }
+}
+
+public struct TracerHookCompileFailures: Swift.Error {
+    public let hookErrors: [UUID: any Swift.Error]
 }
 
 #if canImport(CryptoKit)
