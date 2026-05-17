@@ -4,6 +4,7 @@ import CPango
 import Foundation
 import Gtk
 import LumaCore
+import Observation
 @MainActor
 final class NotebookPane {
     let widget: Box
