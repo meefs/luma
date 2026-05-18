@@ -1,4 +1,3 @@
-import CGtk
 import GIO
 import GLib
 import Gtk
@@ -36,24 +35,18 @@ enum ContextMenu {
 
                 if item.isDestructive {
                     let mi = GIO.MenuItem(label: nil, detailedAction: nil)
-                    g_menu_item_set_attribute_value(
-                        mi.menu_item_ptr,
-                        "custom",
-                        g_variant_new_string(name)
-                    )
+                    let value = GLib.Variant(string: name)
+                    _ = value.refSink()
+                    mi.setAttributeValue(attribute: "custom", value: value)
                     section.append(item: mi)
                     destructiveButtons.append((id: name, text: item.label, handler: item.handler))
                 } else {
-                    let actionPtr = g_simple_action_new(name, nil)!
-                    let action = GIO.SimpleActionRef(raw: UnsafeMutableRawPointer(actionPtr))
+                    let action = GIO.SimpleAction(name: name, parameterType: nil as GLib.VariantTypeRef?)
                     let handler = item.handler
                     action.onActivate { _, _ in
                         MainActor.assumeIsolated { handler() }
                     }
-                    actionPtr.withMemoryRebound(to: GAction.self, capacity: 1) { ptr in
-                        g_action_map_add_action(group.action_map_ptr, ptr)
-                    }
-                    g_object_unref(actionPtr)
+                    group.add(action: action)
                     section.append(label: item.label, detailedAction: "menu.\(name)")
                 }
             }
