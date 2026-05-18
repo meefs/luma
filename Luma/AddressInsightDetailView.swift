@@ -63,6 +63,9 @@ struct AddressInsightDetailView: View {
         }
         .onAppear { refresh() }
         .onChange(of: colorScheme) { _, _ in refresh() }
+        .onChange(of: node != nil) { _, attached in
+            if attached { refresh() }
+        }
     }
 
     private func refresh() {
