@@ -786,9 +786,7 @@ final class AddressNotePopover {
             unusedTransientNoteIDs.removeAll()
             return
         }
-        for noteID in unusedTransientNoteIDs {
-            guard let note = notes.first(where: { $0.id == noteID }) else { continue }
-            guard engine.addressNoteMessages(noteID: noteID).isEmpty else { continue }
+        for note in notes where engine.addressNoteMessages(noteID: note.id).isEmpty {
             engine.deleteAddressNote(note)
         }
         unusedTransientNoteIDs.removeAll()
