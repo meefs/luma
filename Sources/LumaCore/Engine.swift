@@ -338,7 +338,7 @@ public final class Engine {
     public func deleteAddressNote(_ note: AddressNote) {
         try? store.deleteAddressNote(id: note.id)
         rebuildAddressAnnotations(sessionID: note.sessionID)
-        onAddressNoteChanged?(.noteRemoved(noteID: note.id, sessionID: note.sessionID))
+        onAddressNoteChanged?(.noteRemoved(note))
         collaboration.enqueueAddressNoteRemove(noteID: note.id)
     }
 
@@ -4697,7 +4697,7 @@ public final class Engine {
             guard let prior = try? store.fetchAddressNote(id: r.noteID) else { return }
             try? store.deleteAddressNote(id: r.noteID)
             rebuildAddressAnnotations(sessionID: prior.sessionID)
-            onAddressNoteChanged?(.noteRemoved(noteID: r.noteID, sessionID: prior.sessionID))
+            onAddressNoteChanged?(.noteRemoved(prior))
         case .messageAppend(let a):
             try? store.save(a.message)
             onAddressNoteChanged?(.messageAppended(a.message))

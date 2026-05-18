@@ -40,6 +40,9 @@ final class InsightDetailView {
 
     private var disasmLines: [DisassemblyLine] = []
     private var disasmRows: [Box] = []
+    private var addressLabelsByAddress: [UInt64: Label] = [:]
+    private var decorationsBoxesByAddress: [UInt64: Box] = [:]
+    private var noteIndicatorsByAddress: [UInt64: Gtk.Image] = [:]
     private var selectedIndex: Int? = nil
     private var hoveredIndex: Int? = nil
     private var pulsingIndex: Int? = nil
@@ -171,32 +174,48 @@ final class InsightDetailView {
 
     private func handleAddressNoteChanged(_ change: AddressNoteChange) {
         guard let engine else { return }
-        let affectedAnchor: AddressAnchor?
+        let affectedNote: AddressNote?
         switch change {
-        case .noteAdded(let note), .noteUpdated(let note):
-            affectedAnchor = note.sessionID == sessionID ? note.anchor : nil
-        case .noteRemoved(let noteID, let sid):
-            guard sid == sessionID else { return }
-            affectedAnchor = (try? engine.store.fetchAddressNote(id: noteID))?.anchor
+        case .noteAdded(let note), .noteUpdated(let note), .noteRemoved(let note):
+            affectedNote = note.sessionID == sessionID ? note : nil
         case .messageAppended, .messageEdited:
             return
         }
-        guard let anchor = affectedAnchor,
+        guard let note = affectedNote,
             let node = engine.node(forSessionID: sessionID),
-            let address = try? node.resolveSyncIfReady(anchor)
+            let address = try? node.resolveSyncIfReady(note.anchor)
         else { return }
-        refreshRowDecorations(at: address)
+        updateNoteIndicator(at: address)
     }
 
-    private func refreshRowDecorations(at address: UInt64) {
-        guard let index = disasmLines.firstIndex(where: { $0.address == address }),
-            index < disasmRows.count
-        else { return }
-        let row = disasmRows[index]
-        guard let oldDecorations = row.firstChild else { return }
-        row.remove(child: oldDecorations)
-        let newDecorations = makeDecorationsBox(address: address)
-        row.prepend(child: newDecorations)
+    private func updateNoteIndicator(at address: UInt64) {
+        guard let decorationsBox = decorationsBoxesByAddress[address] else { return }
+        let noteCount = engine?.addressAnnotations[sessionID]?[address]?.noteCount ?? 0
+        if noteCount > 0 {
+            let bubble = noteIndicatorsByAddress[address] ?? installNoteIndicator(in: decorationsBox, address: address)
+            bubble.tooltipText = "\(noteCount) thread\(noteCount == 1 ? "" : "s")"
+        } else if let bubble = noteIndicatorsByAddress.removeValue(forKey: address) {
+            decorationsBox.remove(child: bubble)
+        }
+    }
+
+    private func installNoteIndicator(in decorationsBox: Box, address: UInt64) -> Gtk.Image {
+        let bubble = Gtk.Image(iconName: "mail-unread-symbolic")
+        bubble.pixelSize = 12
+        bubble.add(cssClass: "luma-disasm-note-bubble")
+        bubble.valign = .center
+        let click = GestureClick()
+        click.set(button: 1)
+        click.onPressed { [weak self] _, _, _, _ in
+            MainActor.assumeIsolated {
+                guard let self, let anchor = self.addressLabelsByAddress[address] else { return }
+                self.openNotePopover(anchoredAt: anchor, address: address)
+            }
+        }
+        bubble.install(controller: click)
+        decorationsBox.append(child: bubble)
+        noteIndicatorsByAddress[address] = bubble
+        return bubble
     }
 
     // MARK: - Session banner
@@ -289,6 +308,9 @@ final class InsightDetailView {
         isLoadingMore = false
         disasmLines = []
         disasmRows = []
+        addressLabelsByAddress.removeAll()
+        decorationsBoxesByAddress.removeAll()
+        noteIndicatorsByAddress.removeAll()
         selectedIndex = nil
         hoveredIndex = nil
         pulsingIndex = nil
@@ -561,6 +583,7 @@ final class InsightDetailView {
         decorationsBox.halign = .end
         decorationsBox.valign = .center
         decorationsBox.setSizeRequest(width: 16, height: 16)
+        decorationsBoxesByAddress[address] = decorationsBox
 
         let annotation = engine?.addressAnnotations[sessionID]?[address]
         for deco in (annotation?.decorations ?? []).prefix(3) {
@@ -573,20 +596,8 @@ final class InsightDetailView {
         }
         let noteCount = annotation?.noteCount ?? 0
         if noteCount > 0 {
-            let bubble = Gtk.Image(iconName: "mail-unread-symbolic")
-            bubble.pixelSize = 12
-            bubble.add(cssClass: "luma-disasm-note-bubble")
+            let bubble = installNoteIndicator(in: decorationsBox, address: address)
             bubble.tooltipText = "\(noteCount) thread\(noteCount == 1 ? "" : "s")"
-            bubble.valign = .center
-            let click = GestureClick()
-            click.set(button: 1)
-            click.onPressed { [weak self] _, _, _, _ in
-                MainActor.assumeIsolated {
-                    self?.openNotePopover(anchoredAt: bubble, address: address)
-                }
-            }
-            bubble.install(controller: click)
-            decorationsBox.append(child: bubble)
         }
         return decorationsBox
     }
@@ -611,6 +622,7 @@ final class InsightDetailView {
         addrLabel.ellipsize = EllipsizeMode.end
         addrLabel.widthChars = 18
         addrLabel.maxWidthChars = 18
+        addressLabelsByAddress[line.address] = addrLabel
 
         let address = line.address
         let addrGesture = GestureClick()
