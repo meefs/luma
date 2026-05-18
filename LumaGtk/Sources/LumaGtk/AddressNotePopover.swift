@@ -305,6 +305,7 @@ final class AddressNotePopover {
         list.marginEnd = 12
         list.marginTop = 12
         list.marginBottom = 12
+        list.valign = .end
         messagesBox = list
         scroll.set(child: list)
         column.append(child: scroll)
@@ -394,11 +395,13 @@ final class AddressNotePopover {
     }
 
     private func confirmDeleteMessage(messageID: UUID) {
-        guard let message = messages.first(where: { $0.id == messageID }) else { return }
+        guard let message = messages.first(where: { $0.id == messageID }),
+            let anchor = messageBodiesByID[messageID]
+        else { return }
         confirmDestructive(
             heading: "Delete message?",
-            body: "This will remove the message from the thread.",
-            destructiveLabel: "Delete"
+            destructiveLabel: "Delete",
+            anchor: anchor
         ) { [weak self] in
             self?.commitDeleteMessage(message: message)
         }
@@ -597,7 +600,8 @@ final class AddressNotePopover {
         Task { @MainActor [weak self] in
             guard let scroll = self?.messagesScroll,
                 let box = self?.messagesBox,
-                let adj = scroll.vadjustment
+                let adj = scroll.vadjustment,
+                box.width > 0
             else { return }
             var natural: gint = 0
             box.measure(orientation: GTK_ORIENTATION_VERTICAL, for: Int(box.width), natural: &natural)
@@ -636,11 +640,14 @@ final class AddressNotePopover {
     }
 
     private func deleteActive() {
-        guard let id = activeNoteID, let note = notes.first(where: { $0.id == id }) else { return }
+        guard let id = activeNoteID,
+            let note = notes.first(where: { $0.id == id }),
+            let anchor = deleteButton
+        else { return }
         confirmDestructive(
             heading: "Delete thread?",
-            body: "This will remove the thread and its messages from this address.",
-            destructiveLabel: "Delete"
+            destructiveLabel: "Delete",
+            anchor: anchor
         ) { [weak self] in
             self?.commitDeleteActive(note: note)
         }
@@ -660,20 +667,47 @@ final class AddressNotePopover {
         rebuildBody()
     }
 
-    private func confirmDestructive(heading: String, body: String, destructiveLabel: String, action: @escaping () -> Void) {
-        guard let anchor = popover?.parent else { return }
-        let dialog = Adw.AlertDialog(heading: heading, body: body)
-        dialog.addResponse(id: "cancel", label: "_Cancel")
-        dialog.addResponse(id: "confirm", label: destructiveLabel)
-        dialog.setResponseAppearance(response: "confirm", appearance: .destructive)
-        dialog.setDefault(response: "cancel")
-        dialog.setClose(response: "cancel")
-        dialog.onResponse { _, responseID in
+    private func confirmDestructive(heading: String, destructiveLabel: String, anchor: Widget, action: @escaping () -> Void) {
+        let confirmation = Popover()
+        confirmation.autohide = true
+        confirmation.position = .bottom
+        confirmation.set(parent: anchor)
+
+        let column = Box(orientation: .vertical, spacing: 8)
+        column.marginStart = 12
+        column.marginEnd = 12
+        column.marginTop = 12
+        column.marginBottom = 12
+
+        let headingLabel = Label(str: heading)
+        headingLabel.halign = .start
+        headingLabel.xalign = 0
+        headingLabel.add(cssClass: "heading")
+        column.append(child: headingLabel)
+
+        let buttonRow = Box(orientation: .horizontal, spacing: 6)
+        buttonRow.halign = .end
+
+        let cancelBtn = Button(label: "Cancel")
+        cancelBtn.add(cssClass: "flat")
+        cancelBtn.onClicked { _ in
+            MainActor.assumeIsolated { confirmation.popdown() }
+        }
+        buttonRow.append(child: cancelBtn)
+
+        let confirmBtn = Button(label: destructiveLabel)
+        confirmBtn.add(cssClass: "destructive-action")
+        confirmBtn.onClicked { _ in
             MainActor.assumeIsolated {
-                if responseID == "confirm" { action() }
+                confirmation.popdown()
+                action()
             }
         }
-        dialog.present(parent: WidgetRef(anchor))
+        buttonRow.append(child: confirmBtn)
+        column.append(child: buttonRow)
+
+        confirmation.set(child: column)
+        confirmation.popup()
     }
 
     private func saveNote() {

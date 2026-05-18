@@ -25,7 +25,7 @@ enum ContextMenu {
     ) {
         let menu = GIO.Menu()
         let group = GIO.SimpleActionGroup()
-        var destructiveButtons: [(id: String, text: String, actionName: String)] = []
+        var destructiveButtons: [(id: String, text: String, handler: () -> Void)] = []
         var idx = 0
 
         for items in sections where !items.isEmpty {
@@ -33,17 +33,6 @@ enum ContextMenu {
             for item in items {
                 let name = "a\(idx)"
                 idx += 1
-
-                let actionPtr = g_simple_action_new(name, nil)!
-                let action = GIO.SimpleActionRef(raw: UnsafeMutableRawPointer(actionPtr))
-                let handler = item.handler
-                action.onActivate { _, _ in
-                    MainActor.assumeIsolated { handler() }
-                }
-                actionPtr.withMemoryRebound(to: GAction.self, capacity: 1) { ptr in
-                    g_action_map_add_action(group.action_map_ptr, ptr)
-                }
-                g_object_unref(actionPtr)
 
                 if item.isDestructive {
                     let mi = GIO.MenuItem(label: nil, detailedAction: nil)
@@ -53,8 +42,18 @@ enum ContextMenu {
                         g_variant_new_string(name)
                     )
                     section.append(item: mi)
-                    destructiveButtons.append((id: name, text: item.label, actionName: "menu.\(name)"))
+                    destructiveButtons.append((id: name, text: item.label, handler: item.handler))
                 } else {
+                    let actionPtr = g_simple_action_new(name, nil)!
+                    let action = GIO.SimpleActionRef(raw: UnsafeMutableRawPointer(actionPtr))
+                    let handler = item.handler
+                    action.onActivate { _, _ in
+                        MainActor.assumeIsolated { handler() }
+                    }
+                    actionPtr.withMemoryRebound(to: GAction.self, capacity: 1) { ptr in
+                        g_action_map_add_action(group.action_map_ptr, ptr)
+                    }
+                    g_object_unref(actionPtr)
                     section.append(label: item.label, detailedAction: "menu.\(name)")
                 }
             }
@@ -75,7 +74,13 @@ enum ContextMenu {
             button.set(child: label)
             button.add(cssClass: "flat")
             button.add(cssClass: "luma-menu-destructive")
-            button.set(actionName: item.actionName)
+            let handler = item.handler
+            button.onClicked { _ in
+                MainActor.assumeIsolated {
+                    popover.popdown()
+                    _Concurrency.Task { @MainActor in handler() }
+                }
+            }
             _ = popover.add(child: button, id: item.id)
         }
 

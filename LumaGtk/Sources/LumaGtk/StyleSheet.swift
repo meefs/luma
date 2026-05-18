@@ -301,8 +301,9 @@ enum StyleSheet {
     popover.menu button.luma-menu-destructive {
         color: @error_color;
         font-weight: normal;
-        padding: 6px 8px;
+        padding: 6px 12px;
         min-height: 0;
+        margin: 0;
     }
     popover.menu button.luma-menu-destructive:hover {
         background-color: alpha(@error_color, 0.12);
