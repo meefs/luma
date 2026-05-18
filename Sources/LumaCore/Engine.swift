@@ -359,6 +359,15 @@ public final class Engine {
         return message
     }
 
+    public func deleteAddressNoteMessage(_ message: AddressNoteMessage) {
+        try? store.deleteAddressNoteMessage(id: message.id)
+        if let note = try? store.fetchAddressNote(id: message.noteID) {
+            bumpNoteUpdatedAt(note)
+        }
+        onAddressNoteChanged?(.messageRemoved(message))
+        collaboration.enqueueAddressNoteMessageRemove(noteID: message.noteID, messageID: message.id)
+    }
+
     public func editUserMessage(noteID: UUID, messageID: UUID, body: String) -> AddressNoteMessage? {
         guard var message = try? store.fetchAddressNoteMessage(id: messageID),
             message.noteID == noteID,
@@ -4713,6 +4722,10 @@ public final class Engine {
             message.bodyMarkdown = e.bodyMarkdown
             try? store.save(message)
             onAddressNoteChanged?(.messageEdited(message))
+        case .messageRemove(let r):
+            guard let prior = try? store.fetchAddressNoteMessage(id: r.messageID) else { return }
+            try? store.deleteAddressNoteMessage(id: r.messageID)
+            onAddressNoteChanged?(.messageRemoved(prior))
         }
     }
 

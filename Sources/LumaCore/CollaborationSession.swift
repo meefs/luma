@@ -617,6 +617,10 @@ public final class CollaborationSession {
         enqueueAddressNoteOp(.messageEdit(.init(noteID: noteID, messageID: messageID, bodyMarkdown: bodyMarkdown)))
     }
 
+    public func enqueueAddressNoteMessageRemove(noteID: UUID, messageID: UUID) {
+        enqueueAddressNoteOp(.messageRemove(.init(noteID: noteID, messageID: messageID)))
+    }
+
     private func enqueueAddressNoteOp(_ op: AddressNoteOp) {
         guard isCollaborative else { return }
         try? store.saveAddressNoteOutboxOp(op)

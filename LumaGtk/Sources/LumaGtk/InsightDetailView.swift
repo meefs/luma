@@ -178,7 +178,7 @@ final class InsightDetailView {
         switch change {
         case .noteAdded(let note), .noteUpdated(let note), .noteRemoved(let note):
             affectedNote = note.sessionID == sessionID ? note : nil
-        case .messageAppended, .messageEdited:
+        case .messageAppended, .messageEdited, .messageRemoved:
             return
         }
         guard let note = affectedNote,

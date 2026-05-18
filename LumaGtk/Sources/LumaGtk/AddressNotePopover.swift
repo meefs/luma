@@ -34,6 +34,8 @@ final class AddressNotePopover {
     private var streamingRow: Widget?
     private var streamingBody: Label?
     private var streamingText: String = ""
+    private var messageRowsByID: [UUID: Box] = [:]
+    private var messageBodiesByID: [UUID: Label] = [:]
     private var errorLabel: Label?
 
     private var notes: [AddressNote] = []
@@ -213,6 +215,8 @@ final class AddressNotePopover {
         while let child = host.firstChild {
             host.remove(child: child)
         }
+        messageRowsByID.removeAll()
+        messageBodiesByID.removeAll()
         refreshHeaderControls()
         if activeNoteID == nil {
             host.append(child: makeEmptyState())
@@ -315,11 +319,11 @@ final class AddressNotePopover {
         return column
     }
 
-    private func makeMessageRow(_ message: AddressNoteMessage) -> Widget {
+    private func makeMessageRow(_ message: AddressNoteMessage) -> Box {
         makeMessageRowReturningBody(message).row
     }
 
-    private func makeMessageRowReturningBody(_ message: AddressNoteMessage) -> (row: Widget, body: Label) {
+    private func makeMessageRowReturningBody(_ message: AddressNoteMessage) -> (row: Box, body: Label) {
         let row = Box(orientation: .vertical, spacing: 2)
         row.halign = .fill
         row.hexpand = true
@@ -355,7 +359,138 @@ final class AddressNotePopover {
         body.add(cssClass: "card")
         body.marginTop = 2
         row.append(child: body)
+
+        messageRowsByID[message.id] = row
+        messageBodiesByID[message.id] = body
+        if message.role == .user {
+            installUserMessageActions(row: row, body: body, message: message)
+        }
         return (row, body)
+    }
+
+    private func installUserMessageActions(row: Box, body: Label, message: AddressNoteMessage) {
+        let messageID = message.id
+        let click = GestureClick()
+        click.set(button: 3)
+        click.propagationPhase = GTK_PHASE_CAPTURE
+        click.onPressed { [weak self] _, _, x, y in
+            MainActor.assumeIsolated {
+                self?.showMessageContextMenu(anchor: body, x: x, y: y, messageID: messageID)
+            }
+        }
+        body.install(controller: click)
+    }
+
+    private func showMessageContextMenu(anchor: Widget, x: Double, y: Double, messageID: UUID) {
+        let items: [ContextMenu.Item] = [
+            .init("Edit") { [weak self] in
+                self?.beginEditingMessage(messageID: messageID)
+            },
+            .init("Delete", destructive: true) { [weak self] in
+                self?.confirmDeleteMessage(messageID: messageID)
+            },
+        ]
+        ContextMenu.present([items], at: anchor, x: x, y: y)
+    }
+
+    private func confirmDeleteMessage(messageID: UUID) {
+        guard let message = messages.first(where: { $0.id == messageID }) else { return }
+        confirmDestructive(
+            heading: "Delete message?",
+            body: "This will remove the message from the thread.",
+            destructiveLabel: "Delete"
+        ) { [weak self] in
+            self?.commitDeleteMessage(message: message)
+        }
+    }
+
+    private func commitDeleteMessage(message: AddressNoteMessage) {
+        guard let engine, let row = messageRowsByID.removeValue(forKey: message.id) else { return }
+        engine.deleteAddressNoteMessage(message)
+        messageBodiesByID.removeValue(forKey: message.id)
+        messages.removeAll { $0.id == message.id }
+        messagesBox?.remove(child: row)
+    }
+
+    private func beginEditingMessage(messageID: UUID) {
+        guard let message = messages.first(where: { $0.id == messageID }),
+            let row = messageRowsByID[messageID],
+            let body = messageBodiesByID[messageID]
+        else { return }
+        body.visible = false
+
+        let editor = TextView()
+        editor.wrapMode = .word
+        editor.topMargin = 6
+        editor.bottomMargin = 6
+        editor.leftMargin = 8
+        editor.rightMargin = 8
+        editor.acceptsTab = false
+        editor.buffer?.set(text: message.bodyMarkdown, len: Int(message.bodyMarkdown.utf8.count))
+
+        let scroll = ScrolledWindow()
+        scroll.hexpand = true
+        scroll.setSizeRequest(width: -1, height: 96)
+        scroll.add(cssClass: "card")
+        scroll.set(child: editor)
+        scroll.marginTop = 2
+        row.append(child: scroll)
+
+        let actions = Box(orientation: .horizontal, spacing: 6)
+        actions.halign = .end
+        actions.marginTop = 4
+
+        let cancelBtn = Button(label: "Cancel")
+        cancelBtn.add(cssClass: "flat")
+        cancelBtn.onClicked { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.finishEditingMessage(row: row, body: body, scroll: scroll, actions: actions)
+            }
+        }
+
+        let saveBtn = Button(label: "Save")
+        saveBtn.add(cssClass: "suggested-action")
+        saveBtn.onClicked { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let text = self.textFrom(editor: editor)
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty, trimmed != message.bodyMarkdown,
+                    let updated = self.engine?.editUserMessage(noteID: message.noteID, messageID: message.id, body: trimmed)
+                {
+                    self.messages = self.messages.map { $0.id == updated.id ? updated : $0 }
+                    body.setMarkup(str: MissionMarkdown.pangoMarkup(from: updated.bodyMarkdown))
+                }
+                self.finishEditingMessage(row: row, body: body, scroll: scroll, actions: actions)
+            }
+        }
+
+        actions.append(child: cancelBtn)
+        actions.append(child: saveBtn)
+        row.append(child: actions)
+
+        _ = editor.grabFocus()
+    }
+
+    private func finishEditingMessage(row: Box, body: Label, scroll: ScrolledWindow, actions: Box) {
+        row.remove(child: scroll)
+        row.remove(child: actions)
+        body.visible = true
+    }
+
+    private func textFrom(editor: TextView) -> String {
+        guard let buffer = editor.buffer else { return "" }
+        let startPtr = UnsafeMutablePointer<GtkTextIter>.allocate(capacity: 1)
+        let endPtr = UnsafeMutablePointer<GtkTextIter>.allocate(capacity: 1)
+        defer {
+            startPtr.deallocate()
+            endPtr.deallocate()
+        }
+        let start = TextIter(startPtr)
+        let end = TextIter(endPtr)
+        buffer.getStart(iter: start)
+        buffer.getEnd(iter: end)
+        return buffer.getText(start: start, end: end, includeHiddenChars: true) ?? ""
     }
 
     private func makeInputBar() -> Widget {

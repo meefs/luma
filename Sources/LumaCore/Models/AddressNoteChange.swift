@@ -6,4 +6,5 @@ public enum AddressNoteChange: Sendable {
     case noteRemoved(AddressNote)
     case messageAppended(AddressNoteMessage)
     case messageEdited(AddressNoteMessage)
+    case messageRemoved(AddressNoteMessage)
 }

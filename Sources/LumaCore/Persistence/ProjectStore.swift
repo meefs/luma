@@ -512,6 +512,12 @@ public final class ProjectStore: Sendable {
         }
     }
 
+    public func deleteAddressNoteMessage(id: UUID) throws {
+        try db.write { db in
+            _ = try AddressNoteMessage.deleteOne(db, key: id)
+        }
+    }
+
     public func saveAddressNoteOutboxOp(_ op: AddressNoteOp) throws {
         try db.write { db in
             let payload = op.toJSON()

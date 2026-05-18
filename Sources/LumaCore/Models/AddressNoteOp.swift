@@ -5,6 +5,7 @@ public enum AddressNoteOp: Sendable {
     case noteRemove(NoteRemove)
     case messageAppend(MessageAppend)
     case messageEdit(MessageEdit)
+    case messageRemove(MessageRemove)
 
     public var opID: UUID {
         switch self {
@@ -12,6 +13,7 @@ public enum AddressNoteOp: Sendable {
         case .noteRemove(let r): return r.opID
         case .messageAppend(let a): return a.opID
         case .messageEdit(let e): return e.opID
+        case .messageRemove(let r): return r.opID
         }
     }
 
@@ -21,6 +23,7 @@ public enum AddressNoteOp: Sendable {
         case .noteRemove(let r): return r.noteID
         case .messageAppend(let a): return a.message.noteID
         case .messageEdit(let e): return e.noteID
+        case .messageRemove(let r): return r.noteID
         }
     }
 
@@ -30,6 +33,7 @@ public enum AddressNoteOp: Sendable {
         case .noteRemove: return "address_note_remove"
         case .messageAppend: return "address_note_message_append"
         case .messageEdit: return "address_note_message_edit"
+        case .messageRemove: return "address_note_message_remove"
         }
     }
 
@@ -77,6 +81,18 @@ public enum AddressNoteOp: Sendable {
         }
     }
 
+    public struct MessageRemove: Sendable {
+        public let opID: UUID
+        public let noteID: UUID
+        public let messageID: UUID
+
+        public init(opID: UUID = UUID(), noteID: UUID, messageID: UUID) {
+            self.opID = opID
+            self.noteID = noteID
+            self.messageID = messageID
+        }
+    }
+
     public func toJSON() -> [String: Any] {
         var obj: [String: Any] = [
             "op_id": opID.uuidString,
@@ -93,6 +109,9 @@ public enum AddressNoteOp: Sendable {
             obj["note_id"] = e.noteID.uuidString
             obj["message_id"] = e.messageID.uuidString
             obj["body_markdown"] = e.bodyMarkdown
+        case .messageRemove(let r):
+            obj["note_id"] = r.noteID.uuidString
+            obj["message_id"] = r.messageID.uuidString
         }
         return obj
     }
@@ -127,6 +146,13 @@ public enum AddressNoteOp: Sendable {
                 let body = obj["body_markdown"] as? String
             else { return nil }
             return .messageEdit(MessageEdit(opID: opID, noteID: nID, messageID: mID, bodyMarkdown: body))
+        case "address_note_message_remove":
+            guard let nIDStr = obj["note_id"] as? String,
+                let nID = UUID(uuidString: nIDStr),
+                let mIDStr = obj["message_id"] as? String,
+                let mID = UUID(uuidString: mIDStr)
+            else { return nil }
+            return .messageRemove(MessageRemove(opID: opID, noteID: nID, messageID: mID))
         default:
             return nil
         }
