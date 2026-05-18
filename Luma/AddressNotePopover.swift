@@ -13,6 +13,7 @@ struct AddressNotePopover: View {
     @State private var draft: String = ""
     @State private var pending: PendingState = .idle
     @State private var unusedTransientNoteIDs: Set<UUID> = []
+    @State private var streamingPlaceholder: AddressNoteMessage?
 
     private enum PendingState {
         case idle
@@ -94,17 +95,37 @@ struct AddressNotePopover: View {
 
     private func threadView(note: AddressNote) -> some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(messages) { message in
-                        MessageRow(message: message)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(messages) { message in
+                            MessageRow(message: message)
+                                .id(message.id)
+                        }
+                        if let placeholder = streamingPlaceholder {
+                            MessageRow(message: placeholder)
+                                .id(placeholder.id)
+                        }
                     }
+                    .padding(12)
                 }
-                .padding(12)
+                .onChange(of: messages.count) { _, _ in
+                    scrollToLastID(proxy: proxy)
+                }
+                .onChange(of: streamingPlaceholder?.bodyMarkdown) { _, _ in
+                    scrollToLastID(proxy: proxy)
+                }
+                .onAppear { scrollToLastID(proxy: proxy) }
             }
             Divider()
             inputBar(note: note)
         }
+    }
+
+    private func scrollToLastID(proxy: ScrollViewProxy) {
+        let lastID = streamingPlaceholder?.id ?? messages.last?.id
+        guard let lastID else { return }
+        proxy.scrollTo(lastID, anchor: .bottom)
     }
 
     private var emptyState: some View {
@@ -220,12 +241,26 @@ struct AddressNotePopover: View {
         draft = ""
         pending = .sending
         let defaults = LumaAppState.shared.missionDefaults
+        streamingPlaceholder = AddressNoteMessage(
+            noteID: note.id,
+            index: -1,
+            role: .assistant,
+            bodyMarkdown: "",
+            modelID: defaults.modelID
+        )
         Task { @MainActor in
             let reply = await engine.requestAIReply(
                 noteID: note.id,
                 providerID: defaults.providerID,
-                modelID: defaults.modelID
+                modelID: defaults.modelID,
+                onDelta: { delta in
+                    if var placeholder = streamingPlaceholder {
+                        placeholder.bodyMarkdown += delta
+                        streamingPlaceholder = placeholder
+                    }
+                }
             )
+            streamingPlaceholder = nil
             if let reply {
                 messages.append(reply)
                 pending = .idle
@@ -296,7 +331,11 @@ private struct MessageRow: View {
     private var roleLabel: String {
         switch message.role {
         case .user: return message.author?.name ?? "You"
-        case .assistant: return message.modelID ?? "Assistant"
+        case .assistant:
+            if let modelID = message.modelID, !modelID.isEmpty, modelID != "default" {
+                return modelID
+            }
+            return "Assistant"
         case .system: return "System"
         }
     }

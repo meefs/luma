@@ -30,6 +30,11 @@ final class AddressNotePopover {
     private var saveButton: Button?
     private var askButton: Button?
     private var askSpinner: Adw.Spinner?
+    private var askIcon: Gtk.Image?
+    private var streamingRow: Widget?
+    private var streamingBody: Label?
+    private var streamingText: String = ""
+    private var stickyBottom: Bool = true
     private var errorLabel: Label?
 
     private var notes: [AddressNote] = []
@@ -309,12 +314,19 @@ final class AddressNotePopover {
             list.append(child: makeMessageRow(message))
         }
 
+        installScrollStickiness()
+        stickyBottom = true
+
         column.append(child: Separator(orientation: .horizontal))
         column.append(child: makeInputBar())
         return column
     }
 
     private func makeMessageRow(_ message: AddressNoteMessage) -> Widget {
+        makeMessageRowReturningBody(message).row
+    }
+
+    private func makeMessageRowReturningBody(_ message: AddressNoteMessage) -> (row: Widget, body: Label) {
         let row = Box(orientation: .vertical, spacing: 2)
         row.halign = .fill
         row.hexpand = true
@@ -349,7 +361,7 @@ final class AddressNotePopover {
         body.add(cssClass: "card")
         body.marginTop = 2
         row.append(child: body)
-        return row
+        return (row, body)
     }
 
     private func makeInputBar() -> Widget {
@@ -402,37 +414,41 @@ final class AddressNotePopover {
         scroll.set(child: entry)
         row.append(child: scroll)
 
+        let buttonColumn = Box(orientation: .vertical, spacing: 4)
+        buttonColumn.valign = .end
+
+        let askBtn = Button()
+        let askIcon = Gtk.Image(iconName: "mail-send-symbolic")
+        askIcon.pixelSize = 14
+        let spinner = Adw.Spinner()
+        spinner.visible = false
+        let askContent = Box(orientation: .horizontal, spacing: 0)
+        askContent.append(child: askIcon)
+        askContent.append(child: spinner)
+        askBtn.set(child: askContent)
+        self.askIcon = askIcon
+        askBtn.add(cssClass: "suggested-action")
+        askBtn.tooltipText = "Ask AI"
+        askBtn.onClicked { [weak self] _ in
+            MainActor.assumeIsolated { self?.askAI() }
+        }
+        askButton = askBtn
+        askSpinner = spinner
+        buttonColumn.append(child: askBtn)
+
         let saveBtn = Button()
         let saveIcon = Gtk.Image(iconName: "document-edit-symbolic")
         saveIcon.pixelSize = 14
         saveBtn.set(child: saveIcon)
         saveBtn.add(cssClass: "flat")
         saveBtn.tooltipText = "Save as user note"
-        saveBtn.valign = .end
         saveBtn.onClicked { [weak self] _ in
             MainActor.assumeIsolated { self?.saveNote() }
         }
         saveButton = saveBtn
-        row.append(child: saveBtn)
+        buttonColumn.append(child: saveBtn)
 
-        let askBtn = Button()
-        let askContent = Box(orientation: .horizontal, spacing: 0)
-        let askIcon = Gtk.Image(iconName: "mail-send-symbolic")
-        askIcon.pixelSize = 14
-        askContent.append(child: askIcon)
-        let spinner = Adw.Spinner()
-        spinner.visible = false
-        askContent.append(child: spinner)
-        askBtn.set(child: askContent)
-        askBtn.add(cssClass: "suggested-action")
-        askBtn.tooltipText = "Ask AI"
-        askBtn.valign = .end
-        askBtn.onClicked { [weak self] _ in
-            MainActor.assumeIsolated { self?.askAI() }
-        }
-        askButton = askBtn
-        askSpinner = spinner
-        row.append(child: askBtn)
+        row.append(child: buttonColumn)
 
         column.append(child: row)
         refreshPendingUI()
@@ -448,6 +464,7 @@ final class AddressNotePopover {
         saveButton?.sensitive = !isSending
         askButton?.sensitive = !isSending
         askSpinner?.visible = isSending
+        askIcon?.visible = !isSending
         if case .error(let reason) = pending {
             errorLabel?.label = reason
             errorLabel?.visible = true
@@ -459,9 +476,28 @@ final class AddressNotePopover {
     private func appendMessageRow(_ message: AddressNoteMessage) {
         messages.append(message)
         messagesBox?.append(child: makeMessageRow(message))
-        Task { @MainActor in
-            if let adj = self.messagesScroll?.vadjustment {
+        scrollToBottom()
+    }
+
+    private func scrollToBottom() {
+        stickyBottom = true
+        if let adj = messagesScroll?.vadjustment {
+            adj.value = max(0, adj.upper - adj.pageSize)
+        }
+    }
+
+    private func installScrollStickiness() {
+        guard let adj = messagesScroll?.vadjustment else { return }
+        adj.onChanged { [weak self] adj in
+            MainActor.assumeIsolated {
+                guard let self, self.stickyBottom else { return }
                 adj.value = max(0, adj.upper - adj.pageSize)
+            }
+        }
+        adj.onValueChanged { [weak self] adj in
+            MainActor.assumeIsolated {
+                let atBottom = adj.value + adj.pageSize >= adj.upper - 1.0
+                self?.stickyBottom = atBottom
             }
         }
     }
@@ -528,13 +564,16 @@ final class AddressNotePopover {
         clearDraft()
         pending = .sending
         refreshPendingUI()
+        startStreamingPlaceholder(modelID: LumaAppState.shared.missionDefaults.modelID)
         let defaults = LumaAppState.shared.missionDefaults
         Task { @MainActor in
             let reply = await engine.requestAIReply(
                 noteID: id,
                 providerID: defaults.providerID,
-                modelID: defaults.modelID
+                modelID: defaults.modelID,
+                onDelta: { [weak self] delta in self?.appendStreamingDelta(delta) }
             )
+            self.removeStreamingPlaceholder()
             if let reply {
                 self.appendMessageRow(reply)
                 self.pending = .idle
@@ -543,6 +582,37 @@ final class AddressNotePopover {
             }
             self.refreshPendingUI()
         }
+    }
+
+    private func startStreamingPlaceholder(modelID: String) {
+        streamingText = ""
+        let placeholder = AddressNoteMessage(
+            noteID: activeNoteID ?? UUID(),
+            index: -1,
+            role: .assistant,
+            bodyMarkdown: "",
+            modelID: modelID
+        )
+        let (row, body) = makeMessageRowReturningBody(placeholder)
+        streamingRow = row
+        streamingBody = body
+        messagesBox?.append(child: row)
+        scrollToBottom()
+    }
+
+    private func appendStreamingDelta(_ delta: String) {
+        streamingText += delta
+        streamingBody?.setMarkup(str: MissionMarkdown.pangoMarkup(from: streamingText))
+        scrollToBottom()
+    }
+
+    private func removeStreamingPlaceholder() {
+        if let row = streamingRow {
+            messagesBox?.remove(child: row)
+        }
+        streamingRow = nil
+        streamingBody = nil
+        streamingText = ""
     }
 
     private func discardUnusedTransientNotes() {
@@ -583,7 +653,11 @@ final class AddressNotePopover {
     private func roleLabel(_ message: AddressNoteMessage) -> String {
         switch message.role {
         case .user: return message.author?.name ?? "You"
-        case .assistant: return message.modelID ?? "Assistant"
+        case .assistant:
+            if let modelID = message.modelID, !modelID.isEmpty, modelID != "default" {
+                return modelID
+            }
+            return "Assistant"
         case .system: return "System"
         }
     }

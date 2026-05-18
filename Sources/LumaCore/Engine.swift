@@ -393,7 +393,8 @@ public final class Engine {
     public func requestAIReply(
         noteID: UUID,
         providerID: String,
-        modelID: String
+        modelID: String,
+        onDelta: (@MainActor (String) -> Void)? = nil
     ) async -> AddressNoteMessage? {
         guard let note = try? store.fetchAddressNote(id: noteID),
             let provider = llmRegistry.provider(id: providerID)
@@ -466,9 +467,15 @@ public final class Engine {
         do {
             for try await event in provider.streamTurn(request, apiKey: apiKey, baseURL: baseURL) {
                 switch event {
+                case .textDelta(let delta):
+                    responseText += delta
+                    onDelta?(delta)
                 case .finalMessage(_, let blocks):
-                    for block in blocks {
-                        if case .text(let t) = block.content { responseText += t }
+                    if responseText.isEmpty {
+                        for block in blocks {
+                            if case .text(let t) = block.content { responseText += t }
+                        }
+                        if !responseText.isEmpty { onDelta?(responseText) }
                     }
                 case .usage(let u):
                     usage = u
