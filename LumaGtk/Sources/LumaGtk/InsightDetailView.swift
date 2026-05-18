@@ -171,17 +171,32 @@ final class InsightDetailView {
 
     private func handleAddressNoteChanged(_ change: AddressNoteChange) {
         guard let engine else { return }
-        let changedSessionID: UUID?
+        let affectedAnchor: AddressAnchor?
         switch change {
         case .noteAdded(let note), .noteUpdated(let note):
-            changedSessionID = note.sessionID
-        case .noteRemoved(_, let sid):
-            changedSessionID = sid
-        case .messageAppended(let m), .messageEdited(let m):
-            changedSessionID = (try? engine.store.fetchAddressNote(id: m.noteID))?.sessionID
+            affectedAnchor = note.sessionID == sessionID ? note.anchor : nil
+        case .noteRemoved(let noteID, let sid):
+            guard sid == sessionID else { return }
+            affectedAnchor = (try? engine.store.fetchAddressNote(id: noteID))?.anchor
+        case .messageAppended, .messageEdited:
+            return
         }
-        guard changedSessionID == sessionID else { return }
-        scheduleRefresh()
+        guard let anchor = affectedAnchor,
+            let node = engine.node(forSessionID: sessionID),
+            let address = try? node.resolveSyncIfReady(anchor)
+        else { return }
+        refreshRowDecorations(at: address)
+    }
+
+    private func refreshRowDecorations(at address: UInt64) {
+        guard let index = disasmLines.firstIndex(where: { $0.address == address }),
+            index < disasmRows.count
+        else { return }
+        let row = disasmRows[index]
+        guard let oldDecorations = row.firstChild else { return }
+        row.remove(child: oldDecorations)
+        let newDecorations = makeDecorationsBox(address: address)
+        row.prepend(child: newDecorations)
     }
 
     // MARK: - Session banner
@@ -541,24 +556,14 @@ final class InsightDetailView {
 
     // MARK: - Row construction
 
-    private func makeDisasmRow(line: DisassemblyLine) -> Box {
-        let row = Box(orientation: .horizontal, spacing: 10)
-        row.add(cssClass: "luma-disasm-row")
-        row.focusable = true
-        row.marginStart = Int(Self.rowLeftGutter)
-        row.marginEnd = 12
-        row.marginTop = 2
-        row.marginBottom = 2
-        row.setSizeRequest(width: -1, height: 16)
-
+    private func makeDecorationsBox(address: UInt64) -> Box {
         let decorationsBox = Box(orientation: .horizontal, spacing: 3)
         decorationsBox.halign = .end
         decorationsBox.valign = .center
         decorationsBox.setSizeRequest(width: 16, height: 16)
 
-        let annotation = engine?.addressAnnotations[sessionID]?[line.address]
-        let decorations = annotation?.decorations ?? []
-        for deco in decorations.prefix(3) {
+        let annotation = engine?.addressAnnotations[sessionID]?[address]
+        for deco in (annotation?.decorations ?? []).prefix(3) {
             let dot = Label(str: "●")
             dot.add(cssClass: "luma-disasm-decoration")
             if let help = deco.help, !help.isEmpty {
@@ -573,18 +578,30 @@ final class InsightDetailView {
             bubble.add(cssClass: "luma-disasm-note-bubble")
             bubble.tooltipText = "\(noteCount) thread\(noteCount == 1 ? "" : "s")"
             bubble.valign = .center
-            let bubbleAddress = line.address
             let click = GestureClick()
             click.set(button: 1)
             click.onPressed { [weak self] _, _, _, _ in
                 MainActor.assumeIsolated {
-                    self?.openNotePopover(anchoredAt: bubble, address: bubbleAddress)
+                    self?.openNotePopover(anchoredAt: bubble, address: address)
                 }
             }
             bubble.install(controller: click)
             decorationsBox.append(child: bubble)
         }
-        row.append(child: decorationsBox)
+        return decorationsBox
+    }
+
+    private func makeDisasmRow(line: DisassemblyLine) -> Box {
+        let row = Box(orientation: .horizontal, spacing: 10)
+        row.add(cssClass: "luma-disasm-row")
+        row.focusable = true
+        row.marginStart = Int(Self.rowLeftGutter)
+        row.marginEnd = 12
+        row.marginTop = 2
+        row.marginBottom = 2
+        row.setSizeRequest(width: -1, height: 16)
+
+        row.append(child: makeDecorationsBox(address: line.address))
 
         let addrLabel = Label(str: line.addressText.plainText)
         addrLabel.add(cssClass: "monospace")
