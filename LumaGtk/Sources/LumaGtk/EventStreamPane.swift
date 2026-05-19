@@ -958,7 +958,7 @@ final class EventStreamPane {
             column.append(child: wrapper.widget)
         }
 
-        if let backtrace = parsed.backtrace, !backtrace.isEmpty, let node {
+        if let backtrace = parsed.backtrace, !backtrace.isEmpty {
             let button = Button()
             button.set(child: Image(iconName: "view-list-symbolic"))
             button.add(cssClass: "flat")
@@ -968,7 +968,7 @@ final class EventStreamPane {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.setPaused(true)
-                    self.presentBacktrace(button: button, node: node, sessionID: sessionID, pointers: backtrace)
+                    self.presentBacktrace(button: button, sessionID: sessionID, pointers: backtrace)
                 }
             }
             column.append(child: button)
@@ -1057,10 +1057,10 @@ final class EventStreamPane {
 
     private func presentBacktrace(
         button: Button,
-        node: LumaCore.ProcessNode,
         sessionID: UUID,
         pointers: [JSInspectValue]
     ) {
+        guard let engine else { return }
         let popover = Popover()
         popover.set(parent: WidgetRef(button))
         popover.autohide = true
@@ -1080,6 +1080,7 @@ final class EventStreamPane {
         header.append(child: title)
         let spinner = Adw.Spinner()
         spinner.valign = .center
+        spinner.visible = false
         header.append(child: spinner)
         let retryButton = Button(label: "Symbolicate")
         retryButton.add(cssClass: "flat")
@@ -1114,7 +1115,7 @@ final class EventStreamPane {
             num.add(cssClass: "monospace")
             num.valign = .center
             row.append(child: num)
-            let line = Label(str: node.anchor(for: addr).displayString)
+            let line = Label(str: engine.anchor(sessionID: sessionID, address: addr).displayString)
             line.add(cssClass: "monospace")
             line.halign = .start
             line.hexpand = true
@@ -1146,7 +1147,12 @@ final class EventStreamPane {
         popover.popup()
 
         let symbolicate: () -> Void = { [weak self] in
-            guard let self else { return }
+            guard let self, let node = engine.node(forSessionID: sessionID) else {
+                spinner.visible = false
+                errorLabel.setText(str: "Symbolication needs a live session.")
+                errorLabel.visible = true
+                return
+            }
             spinner.visible = true
             retryButton.visible = false
             errorLabel.visible = false
@@ -1156,7 +1162,7 @@ final class EventStreamPane {
                     let symbols = try await node.symbolicate(addresses: addresses)
                     for (idx, symbol) in symbols.enumerated() {
                         guard idx < lineLabels.count else { break }
-                        let fallback = node.anchor(for: addresses[idx]).displayString
+                        let fallback = engine.anchor(sessionID: sessionID, address: addresses[idx]).displayString
                         lineLabels[idx].setText(str: self.symbolLabel(for: symbol, fallback: fallback))
                     }
                 } catch {
@@ -1169,7 +1175,12 @@ final class EventStreamPane {
         retryButton.onClicked { _ in
             MainActor.assumeIsolated { symbolicate() }
         }
-        symbolicate()
+        if engine.node(forSessionID: sessionID) != nil {
+            symbolicate()
+        } else {
+            errorLabel.setText(str: "Symbolication needs a live session.")
+            errorLabel.visible = true
+        }
     }
 
     private func openDisassembly(sessionID: UUID, address: UInt64) {

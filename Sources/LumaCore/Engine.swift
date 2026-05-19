@@ -2048,6 +2048,18 @@ public final class Engine {
         return error.localizedDescription
     }
 
+    public func anchor(sessionID: UUID, address: UInt64) -> AddressAnchor {
+        if let node = node(forSessionID: sessionID) {
+            return node.anchor(for: address)
+        }
+        if let modules = session(id: sessionID)?.lastKnownModules,
+            let m = modules.first(where: { address >= $0.base && address < ($0.base + $0.size) })
+        {
+            return .moduleOffset(name: m.name, offset: address - m.base)
+        }
+        return .absolute(address)
+    }
+
     public func node(forSessionID sessionID: UUID) -> ProcessNode? {
         processNodes.first { $0.id == sessionID || $0.sessionID == sessionID }
     }
@@ -3922,11 +3934,7 @@ public final class Engine {
         pointer: UInt64,
         kind: AddressInsight.Kind
     ) throws -> AddressInsight {
-        guard let node = node(forSessionID: sessionID) else {
-            throw LumaCoreError.invalidOperation("No attached process")
-        }
-
-        let anchor = node.anchor(for: pointer)
+        let anchor = anchor(sessionID: sessionID, address: pointer)
 
         let existing = (try? store.fetchInsights(sessionID: sessionID)) ?? []
         if let match = existing.first(where: { $0.kind == kind && $0.anchor == anchor }) {
@@ -3941,7 +3949,7 @@ public final class Engine {
         )
         try store.save(insight)
         onSessionListChanged?(.insightAdded(insight))
-        if let sid = collabSessionID(forNode: node) {
+        if let node = node(forSessionID: sessionID), let sid = collabSessionID(forNode: node) {
             collaboration.enqueueAddInsight(sessionID: sid, insight: insight)
         }
         return insight

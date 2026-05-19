@@ -66,7 +66,7 @@ struct TracerUI: InstrumentUI {
         return AnyView(
             TracerEventRowView(
                 messageView: messageView,
-                process: engine.processNode(forEvent: event),
+                sessionID: event.sessionID,
                 backtrace: ev.backtrace,
                 engine: engine,
                 selection: selection

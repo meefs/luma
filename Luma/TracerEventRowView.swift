@@ -3,7 +3,7 @@ import LumaCore
 
 struct TracerEventRowView: View {
     let messageView: AnyView
-    let process: LumaCore.ProcessNode?
+    let sessionID: UUID?
     let backtrace: [JSInspectValue]?
     let engine: Engine
     @Binding var selection: SidebarItemID?
@@ -16,7 +16,7 @@ struct TracerEventRowView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             messageView
 
-            if let process, let backtrace, !backtrace.isEmpty {
+            if let sessionID, let backtrace, !backtrace.isEmpty {
                 Spacer(minLength: 0)
 
                 Button {
@@ -37,7 +37,7 @@ struct TracerEventRowView: View {
                 .help("Show backtrace")
                 .popover(isPresented: $showBacktracePopover, arrowEdge: .bottom) {
                     TracerBacktraceView(
-                        process: process,
+                        sessionID: sessionID,
                         pointers: backtrace,
                         engine: engine,
                         selection: $selection
@@ -51,7 +51,7 @@ struct TracerEventRowView: View {
 }
 
 private struct TracerBacktraceView: View {
-    let process: LumaCore.ProcessNode
+    let sessionID: UUID
     let pointers: [JSInspectValue]
     let engine: Engine
     @Binding var selection: SidebarItemID?
@@ -71,7 +71,7 @@ private struct TracerBacktraceView: View {
                 if isLoading {
                     ProgressView()
                         .controlSize(.small)
-                } else if lastError != nil {
+                } else if lastError != nil, engine.node(forSessionID: sessionID) != nil {
                     Button("Symbolicate") {
                         Task { await symbolicate() }
                     }
@@ -89,7 +89,7 @@ private struct TracerBacktraceView: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(pointers.enumerated()), id: \.offset) { idx, ptrValue in
                         let addr = ptrValue.nativePointerAddress ?? 0
-                        let anchor = process.anchor(for: addr)
+                        let anchor = engine.anchor(sessionID: sessionID, address: addr)
 
                         HStack(alignment: .center, spacing: 8) {
                             Text("#\(idx + 1)")
@@ -134,7 +134,6 @@ private struct TracerBacktraceView: View {
     }
 
     private func openDisassembly(at address: UInt64) {
-        let sessionID = engine.sessionID(for: process)
         do {
             let insight = try engine.getOrCreateInsight(
                 sessionID: sessionID,
@@ -148,12 +147,16 @@ private struct TracerBacktraceView: View {
     }
 
     private func symbolicate() async {
+        guard let node = engine.node(forSessionID: sessionID) else {
+            lastError = "Symbolication needs a live session."
+            return
+        }
         if isLoading { return }
         isLoading = true
         lastError = nil
 
         do {
-            symbols = try await process.symbolicate(addresses: pointers.compactMap { $0.nativePointerAddress })
+            symbols = try await node.symbolicate(addresses: pointers.compactMap { $0.nativePointerAddress })
         } catch {
             lastError = "Symbolication failed: \(error)"
         }
