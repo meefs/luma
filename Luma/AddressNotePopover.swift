@@ -1,6 +1,12 @@
 import LumaCore
 import SwiftUI
 
+#if canImport(AppKit)
+private let textEditorBackground = Color(nsColor: .textBackgroundColor)
+#else
+private let textEditorBackground = Color(uiColor: .secondarySystemBackground)
+#endif
+
 struct AddressNotePopover: View {
     let engine: Engine
     let sessionID: UUID
@@ -245,7 +251,7 @@ struct AddressNotePopover: View {
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(nsColor: .textBackgroundColor)))
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(textEditorBackground))
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.secondary.opacity(0.3)))
                     .frame(height: 64)
                     .focused($inputFocused)
@@ -449,7 +455,7 @@ private struct MessageRow: View {
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(nsColor: .textBackgroundColor)))
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(textEditorBackground))
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.secondary.opacity(0.3)))
                     .frame(height: 120)
             } else {
