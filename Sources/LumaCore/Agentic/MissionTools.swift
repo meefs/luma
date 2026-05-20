@@ -1035,7 +1035,7 @@ public enum MissionTools {
             guard let dis = engine.disassembler(forSessionID: sessionID) else {
                 return errorResult("no disassembler for session", code: .notFound)
             }
-            let page = await dis.disassemblePage(DisassemblyRequest(address: address, count: count, isDarkMode: false))
+            let page = await dis.disassemblePage(DisassemblyRequest(address: address, count: count, appearance: .light))
             let text = page.lines.map { line in
                 let addr = String(format: "0x%llx", line.address)
                 let asm = line.asmText.plainText
@@ -2915,7 +2915,7 @@ public enum MissionTools {
             }
             let focus = (invocation.args["focus"] as? String) ?? ""
 
-            let lines = await dis.disassemble(DisassemblyRequest(address: address, count: 64, isDarkMode: false))
+            let lines = await dis.disassemble(DisassemblyRequest(address: address, count: 64, appearance: .light))
             let disasmText = lines.map { line in
                 String(format: "0x%llx", line.address) + "  " + line.asmText.plainText
             }.joined(separator: "\n")

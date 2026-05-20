@@ -9,7 +9,7 @@ public final class TraceDisassembler {
 
     private var r2: R2Core!
     private var openTask: Task<Void, Never>?
-    private var currentDarkMode: Bool?
+    private var currentAppearance: Appearance?
 
     public init(
         decoded: DecodedITrace,
@@ -21,11 +21,11 @@ public final class TraceDisassembler {
         self.liveNode = liveNode
     }
 
-    public func disassemble(at address: UInt64, size: Int, isDarkMode: Bool, withFlags: Bool = true) async -> StyledText {
+    public func disassemble(at address: UInt64, size: Int, appearance: Appearance, withFlags: Bool = true) async -> StyledText {
         await ensureOpened()
-        if currentDarkMode != isDarkMode {
-            await r2.applyTheme(isDarkMode ? "default" : "iaito")
-            currentDarkMode = isDarkMode
+        if currentAppearance != appearance {
+            await r2.applyTheme(Disassembler.r2ThemeName(for: appearance))
+            currentAppearance = appearance
         }
         if !withFlags {
             await r2.config.set("asm.flags", bool: false)

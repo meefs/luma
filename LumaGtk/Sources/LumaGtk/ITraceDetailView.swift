@@ -31,7 +31,7 @@ final class ITraceDetailView {
     private let baseCaption: String
     private var serverTotalSize: Int = 0
     private var invalidationListener: Task<Void, Never>?
-    fileprivate var isDarkMode: Bool = ThemeWatcher.isDarkMode()
+    fileprivate var appearance: Appearance = ThemeWatcher.currentAppearance()
     private var themeSignalID: gulong = 0
 
     init(
@@ -262,9 +262,9 @@ final class ITraceDetailView {
     }
 
     fileprivate func handleThemeChanged() {
-        let now = ThemeWatcher.isDarkMode()
-        guard now != isDarkMode else { return }
-        isDarkMode = now
+        let now = ThemeWatcher.currentAppearance()
+        guard now != appearance else { return }
+        appearance = now
         cfgView?.invalidateDisasm()
     }
 
@@ -364,8 +364,8 @@ final class ITraceDetailView {
         let disassembler = self.disassembler
         let provider: ((UInt64, Int) async -> StyledText)? = disassembler.map { d in
             { [weak self] addr, size in
-                let dark = await MainActor.run { self?.isDarkMode ?? false }
-                return await d.disassemble(at: addr, size: size, isDarkMode: dark, withFlags: false)
+                let appearance = await MainActor.run { self?.appearance ?? .light }
+                return await d.disassemble(at: addr, size: size, appearance: appearance, withFlags: false)
             }
         }
 

@@ -1,15 +1,20 @@
 import Foundation
 import SwiftyR2
 
+public enum Appearance: Sendable, Hashable {
+    case light
+    case dark
+}
+
 public struct DisassemblyRequest: Sendable, Hashable {
     public let address: UInt64
     public let count: Int
-    public let isDarkMode: Bool
+    public let appearance: Appearance
 
-    public init(address: UInt64, count: Int, isDarkMode: Bool) {
+    public init(address: UInt64, count: Int, appearance: Appearance) {
         self.address = address
         self.count = count
-        self.isDarkMode = isDarkMode
+        self.appearance = appearance
     }
 }
 
@@ -54,7 +59,7 @@ public final class Disassembler {
 
     private var r2: R2Core!
     private var openTask: Task<Void, Never>?
-    private var currentDarkMode: Bool?
+    private var currentAppearance: Appearance?
     private var analyzedModules: Set<String> = []
 
     public init(
@@ -83,9 +88,9 @@ public final class Disassembler {
 
     public func disassemblePage(_ request: DisassemblyRequest) async -> DisassemblyPage {
         await ensureOpened()
-        if currentDarkMode != request.isDarkMode {
-            await r2.applyTheme(request.isDarkMode ? "default" : "iaito")
-            currentDarkMode = request.isDarkMode
+        if currentAppearance != request.appearance {
+            await r2.applyTheme(Self.r2ThemeName(for: request.appearance))
+            currentAppearance = request.appearance
         }
         let hex = String(request.address, radix: 16)
         if let module = moduleContaining(address: request.address) {
@@ -391,6 +396,13 @@ private func fetchFunctionEnd(hex: String) async -> UInt64? {
             let hex = String(address, radix: 16)
             let flag = "insight." + r2FlagSafe(title(insight))
             _ = await r2.cmd("f \(flag) @ 0x\(hex)")
+        }
+    }
+
+    static func r2ThemeName(for appearance: Appearance) -> String {
+        switch appearance {
+        case .dark: return "default"
+        case .light: return "iaito"
         }
     }
 

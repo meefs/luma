@@ -3,6 +3,7 @@ import CGLib
 import Foundation
 import GLibObject
 import Gtk
+import LumaCore
 
 // All public state lives behind a lock so it can be touched from nonisolated
 // deinit (which Swift 6 considers off-actor) without crashing strict-concurrency
@@ -13,8 +14,8 @@ import Gtk
 
 enum ThemeWatcher {
     @MainActor
-    static func isDarkMode() -> Bool {
-        Adw.StyleManager.getDefault().dark
+    static func currentAppearance() -> Appearance {
+        Adw.StyleManager.getDefault().dark ? .dark : .light
     }
 
     @MainActor

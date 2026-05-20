@@ -99,7 +99,7 @@ struct ITraceDetailView: View {
                             arch: session.processInfo!.arch,
                             disasmProvider: disassembler.map { d in
                                 { [colorScheme] addr, size in
-                                    await d.disassemble(at: addr, size: size, isDarkMode: colorScheme == .dark, withFlags: false)
+                                    await d.disassemble(at: addr, size: size, appearance: colorScheme == .dark ? .dark : .light, withFlags: false)
                                 }
                             },
                             selectedNodeKey: $cfgSelectedNodeKey,
@@ -459,7 +459,7 @@ struct ITraceDetailView: View {
             let styled = await disassembler.disassemble(
                 at: entry.blockAddress,
                 size: size,
-                isDarkMode: colorScheme == .dark
+                appearance: colorScheme == .dark ? .dark : .light
             )
             disasmCache[entry.blockAddress] = styled.attributed
         }

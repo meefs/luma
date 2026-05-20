@@ -60,7 +60,7 @@ final class InsightDetailView {
     private var refreshDebounce: Task<Void, Never>?
     private var isLoadingMore = false
     private var disasmScope: DisassemblyScope = .span
-    private var isDarkMode = false
+    private var appearance: Appearance = .light
     private var themeSignalID: gulong = 0
     private var valueChangedHandler: gulong = 0
     private var lastNodeAvailable: Bool = false
@@ -182,7 +182,7 @@ final class InsightDetailView {
             }
         }
 
-        isDarkMode = ThemeWatcher.isDarkMode()
+        appearance = ThemeWatcher.currentAppearance()
         themeSignalID = ThemeWatcher.subscribe(owner: self) { view in
             view.handleThemeChanged()
         }
@@ -443,7 +443,7 @@ final class InsightDetailView {
                     return
                 }
                 let page = await disassembler.disassemblePage(
-                    DisassemblyRequest(address: resolved, count: Self.initialChunk, isDarkMode: self.isDarkMode)
+                    DisassemblyRequest(address: resolved, count: Self.initialChunk, appearance: self.appearance)
                 )
                 if Task.isCancelled { return }
 
@@ -511,7 +511,7 @@ final class InsightDetailView {
             }
 
             let decoded = await disassembler.disassemble(
-                DisassemblyRequest(address: start, count: Self.moreChunk, isDarkMode: self.isDarkMode)
+                DisassemblyRequest(address: start, count: Self.moreChunk, appearance: self.appearance)
             )
             if Task.isCancelled { return }
             guard !decoded.isEmpty else { return }
@@ -901,9 +901,9 @@ final class InsightDetailView {
     // MARK: - Theme
 
     fileprivate func handleThemeChanged() {
-        let wasDark = isDarkMode
-        isDarkMode = ThemeWatcher.isDarkMode()
-        if isDarkMode != wasDark {
+        let previous = appearance
+        appearance = ThemeWatcher.currentAppearance()
+        if appearance != previous {
             scheduleRefresh()
         }
     }

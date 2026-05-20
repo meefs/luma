@@ -584,7 +584,7 @@ public final class Engine {
             let node = node(forSessionID: note.sessionID),
             let address = try? node.resolveSyncIfReady(note.anchor)
         {
-            let lines64 = await dis.disassemble(DisassemblyRequest(address: address, count: 32, isDarkMode: false))
+            let lines64 = await dis.disassemble(DisassemblyRequest(address: address, count: 32, appearance: .light))
             let disasm = lines64.map {
                 String(format: "0x%llx", $0.address) + "  " + $0.asmText.plainText
             }.joined(separator: "\n")

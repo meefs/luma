@@ -246,7 +246,7 @@ struct AddressInsightDetailView: View {
             return DisassemblyPage(lines: [], scope: .span)
         }
         return await disassembler.disassemblePage(
-            DisassemblyRequest(address: start, count: count, isDarkMode: colorScheme == .dark)
+            DisassemblyRequest(address: start, count: count, appearance: colorScheme == .dark ? .dark : .light)
         )
     }
 }

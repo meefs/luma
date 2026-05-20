@@ -211,9 +211,10 @@ final class ITraceTimeline {
             }
 
             if isSelected {
-                if ThemeWatcher.isDarkMode() {
+                switch ThemeWatcher.currentAppearance() {
+                case .dark:
                     ctx.setSource(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.9)
-                } else {
+                case .light:
                     ctx.setSource(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.7)
                 }
                 ctx.lineWidth = 1.5

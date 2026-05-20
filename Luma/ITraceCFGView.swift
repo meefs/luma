@@ -65,7 +65,7 @@ struct ITraceCFGView: NSViewRepresentable {
         coordinator.registerNames = registerNames
         coordinator.arch = arch
         coordinator.currentSection = currentSection
-        coordinator.isDarkMode = colorScheme == .dark
+        coordinator.themeAppearance = colorScheme == .dark ? .dark : .light
         coordinator.onNavigateFunction = onNavigateFunction
         coordinator.onJumpToFunction = onJumpToFunction
 
@@ -134,11 +134,11 @@ struct ITraceCFGView: NSViewRepresentable {
             }
         }
 
-        container.metalView.clearColor = coordinator.isDarkMode
+        container.metalView.clearColor = coordinator.themeAppearance == .dark
             ? MTLClearColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)
             : MTLClearColor(red: 0.95, green: 0.95, blue: 0.96, alpha: 1)
         container.metalView.needsDisplay = true
-        container.textOverlay.isDarkMode = coordinator.isDarkMode
+        container.textOverlay.themeAppearance = coordinator.themeAppearance
         container.textOverlay.needsDisplay = true
     }
 
@@ -279,7 +279,8 @@ class CFGTextOverlayView: NSView {
     var labels: [NodeLabel] = []
     var cameraOffset: CGPoint = .zero
     var cameraZoom: CGFloat = 1.0
-    var isDarkMode: Bool = true
+    var themeAppearance: Appearance = .dark
+    private var isDarkMode: Bool { themeAppearance == .dark }
 
     override var isFlipped: Bool { true }
 
@@ -385,7 +386,8 @@ extension ITraceCFGView {
         var registerNames: [String] = []
         var arch: String = ""
         var currentSection: Int = 0
-        var isDarkMode: Bool = true
+        var themeAppearance: Appearance = .dark
+        private var isDarkMode: Bool { themeAppearance == .dark }
         var onNavigateFunction: ((Int) -> Void)?
         var onJumpToFunction: ((Int) -> Void)?
         var pendingNav: (direction: Int, axis: PanAxis)?
