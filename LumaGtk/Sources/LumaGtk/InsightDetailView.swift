@@ -214,8 +214,7 @@ final class InsightDetailView {
             return
         }
         guard let note = affectedNote,
-            let node = engine.node(forSessionID: sessionID),
-            let address = try? node.resolveSyncIfReady(note.anchor)
+            let address = engine.resolveSync(sessionID: sessionID, anchor: note.anchor)
         else { return }
         updateNoteIndicator(at: address)
     }

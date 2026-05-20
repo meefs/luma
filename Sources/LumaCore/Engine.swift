@@ -1318,6 +1318,9 @@ public final class Engine {
         }
         notebookEntries = (try? store.fetchNotebookEntries()) ?? []
         sessions = (try? store.fetchSessions()) ?? []
+        for session in sessions {
+            rebuildAddressAnnotations(sessionID: session.id)
+        }
         projectUIState = (try? store.fetchProjectUIState()) ?? ProjectUIState()
         sessionUIStates = (try? store.fetchAllSessionUIStates()) ?? [:]
         customInstrumentDefUIStates = (try? store.fetchAllCustomInstrumentDefUIStates()) ?? [:]
@@ -1898,9 +1901,8 @@ public final class Engine {
             let sid = node.sessionID
             processNodes.remove(at: idx)
             node.stop()
-            addressAnnotations[sid] = nil
-            tracerInstanceIDBySession[sid] = nil
             updateSession(id: sid) { $0.phase = .idle }
+            rebuildAddressAnnotations(sessionID: sid)
         }
     }
 
@@ -3175,11 +3177,8 @@ public final class Engine {
     // MARK: - Address Annotations
 
     public func rebuildAddressAnnotations(sessionID: UUID) {
-        guard let node = node(forSessionID: sessionID) else {
-            addressAnnotations[sessionID] = [:]
-            tracerInstanceIDBySession[sessionID] = nil
-            return
-        }
+        let node = node(forSessionID: sessionID)
+        let resolve = anchorResolver(sessionID: sessionID, node: node)
 
         var map: [UInt64: AddressAnnotation] = [:]
 
@@ -3188,7 +3187,7 @@ public final class Engine {
         {
             tracerInstanceIDBySession[sessionID] = tracer.id
             for hook in config.hooks where hook.state == .enabled {
-                guard let addr = try? node.resolveSyncIfReady(hook.addressAnchor) else { continue }
+                guard let addr = resolve(hook.addressAnchor) else { continue }
                 var ann = map[addr] ?? AddressAnnotation()
                 ann.decorations.append(InstrumentAddressDecoration(help: "Has instruction hook"))
                 ann.tracerHookID = hook.id
@@ -3199,13 +3198,34 @@ public final class Engine {
         }
 
         for note in (try? store.fetchAddressNotes(sessionID: sessionID)) ?? [] {
-            guard let addr = try? node.resolveSyncIfReady(note.anchor) else { continue }
+            guard let addr = resolve(note.anchor) else { continue }
             var ann = map[addr] ?? AddressAnnotation()
             ann.noteCount += 1
             map[addr] = ann
         }
 
         addressAnnotations[sessionID] = map
+    }
+
+    public func resolveSync(sessionID: UUID, anchor: AddressAnchor) -> UInt64? {
+        anchorResolver(sessionID: sessionID, node: node(forSessionID: sessionID))(anchor)
+    }
+
+    private func anchorResolver(sessionID: UUID, node: ProcessNode?) -> (AddressAnchor) -> UInt64? {
+        let modules = modulesSnapshot(forSessionID: sessionID)
+        return { anchor in
+            if let node, let addr = try? node.resolveSyncIfReady(anchor) {
+                return addr
+            }
+            switch anchor {
+            case .absolute(let a):
+                return a
+            case .moduleOffset(let name, let offset):
+                return modules.first(where: { $0.name == name }).map { $0.base &+ offset }
+            case .moduleExport, .objcMethod, .swiftFunc, .debugSymbol, .javaMethod:
+                return nil
+            }
+        }
     }
 
     private func tracerInstance(forSessionID sessionID: UUID) -> InstrumentInstance? {

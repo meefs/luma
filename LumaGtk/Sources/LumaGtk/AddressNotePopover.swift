@@ -200,15 +200,14 @@ final class AddressNotePopover {
     }
 
     private func reloadNotes() {
-        guard let engine, let node = engine.node(forSessionID: sessionID) else {
+        guard let engine else {
             notes = []
             activeNoteID = nil
             rebuildBody()
             return
         }
-        let all = engine.addressNotes(sessionID: sessionID)
-        notes = all.filter { note in
-            (try? node.resolveSyncIfReady(note.anchor)) == address
+        notes = engine.addressNotes(sessionID: sessionID).filter { note in
+            engine.resolveSync(sessionID: sessionID, anchor: note.anchor) == address
         }
         if activeNoteID == nil || !notes.contains(where: { $0.id == activeNoteID }) {
             activeNoteID = notes.last?.id

@@ -301,7 +301,7 @@ struct AddressNotePopover: View {
 
     private func refresh() {
         notes = engine.addressNotes(sessionID: sessionID)
-            .filter { (try? engine.node(forSessionID: sessionID)?.resolveSyncIfReady($0.anchor)) == address }
+            .filter { engine.resolveSync(sessionID: sessionID, anchor: $0.anchor) == address }
         if activeNoteID == nil {
             activeNoteID = notes.last?.id
         }
