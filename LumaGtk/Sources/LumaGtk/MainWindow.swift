@@ -726,6 +726,11 @@ final class MainWindow: InstrumentUIHost {
         if case .mission(let id) = selection {
             if let mission = visibleMissions.first(where: { $0.id == id }) {
                 currentMissionDetailPane?.updateMission(mission)
+                if let idx = missionRowIDs.firstIndex(of: id),
+                    let row = missionsListBox.getRowAt(index: idx + 1)
+                {
+                    missionsListBox.select(row: row)
+                }
             } else {
                 select(.missionsList)
             }
