@@ -1378,6 +1378,7 @@ public enum MissionTools {
 
             let address: UInt64
             var preferredAnchor: AddressAnchor?
+            var preferredDisplayName: String?
             if let parsed = parseHexAddress(target) {
                 address = parsed
             } else {
@@ -1394,12 +1395,20 @@ public enum MissionTools {
                     }
                     address = parsed
                     preferredAnchor = decodeAnchorJSON(first["anchor"] as? [String: Any])
+                    preferredDisplayName = first["displayName"] as? String
                 } catch {
                     return errorResult("resolve failed: \(error.localizedDescription)")
                 }
             }
 
-            guard let result = await engine.addTracerHook(sessionID: sessionID, address: address, kind: kind, code: code, preferredAnchor: preferredAnchor) else {
+            guard let result = await engine.addTracerHook(
+                sessionID: sessionID,
+                address: address,
+                kind: kind,
+                code: code,
+                preferredAnchor: preferredAnchor,
+                preferredDisplayName: preferredDisplayName
+            ) else {
                 return errorResult("failed to install hook at \(String(format: "0x%llx", address))")
             }
             let payload: [String: Any] = [

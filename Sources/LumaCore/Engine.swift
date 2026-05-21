@@ -3323,7 +3323,8 @@ public final class Engine {
         address: UInt64,
         kind: TracerHookKind,
         code: String? = nil,
-        preferredAnchor: AddressAnchor? = nil
+        preferredAnchor: AddressAnchor? = nil,
+        preferredDisplayName: String? = nil
     ) async -> (instrumentID: UUID, hookID: UUID)? {
         guard (try? store.fetchSession(id: sessionID)) != nil else { return nil }
 
@@ -3336,7 +3337,9 @@ public final class Engine {
             anchor = .absolute(address)
         }
 
-        let displayName = anchor.displayString
+        let displayName = preferredDisplayName?.isEmpty == false
+            ? preferredDisplayName!
+            : anchor.displayString
         let hookCode = code ?? defaultTracerCode(kind: kind, anchor: anchor, displayName: displayName)
         let newHook = TracerConfig.Hook(
             id: UUID(),

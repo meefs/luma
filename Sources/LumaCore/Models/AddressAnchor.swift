@@ -35,16 +35,16 @@ public enum AddressAnchor: Codable, Hashable, Sendable {
             return String(format: "0x%llx", a)
 
         case .moduleOffset(let name, let offset):
-            return "\(name)+\(String(format: "0x%llx", offset))"
+            return "\(moduleBasename(name))+\(String(format: "0x%llx", offset))"
 
         case .moduleExport(let name, let export):
-            return "\(name)!\(export)"
+            return "\(moduleBasename(name))!\(export)"
 
         case .objcMethod(let selector):
             return selector
 
         case .swiftFunc(let module, let function):
-            return "\(module)!\(function)"
+            return "\(moduleBasename(module))!\(function)"
 
         case .debugSymbol(let name):
             return name
@@ -139,6 +139,11 @@ public enum AddressAnchor: Codable, Hashable, Sendable {
             ]
         }
     }
+}
+
+private func moduleBasename(_ name: String) -> String {
+    guard let slash = name.lastIndex(of: "/") else { return name }
+    return String(name[name.index(after: slash)...])
 }
 
 private func parseAnchorString(_ value: Any?, field: String) throws -> String {
