@@ -47,6 +47,7 @@ public enum MissionTools {
         registerListTracerHooks(in: catalog, engine: engine)
         registerReadTracerHook(in: catalog, engine: engine)
         registerUpdateTracerHook(in: catalog, engine: engine)
+        registerEditTracerHook(in: catalog, engine: engine)
         registerRemoveTracerHook(in: catalog, engine: engine)
         registerListCustomInstruments(in: catalog, engine: engine)
         registerReadCustomInstrument(in: catalog, engine: engine)
@@ -1481,7 +1482,7 @@ public enum MissionTools {
     private static func registerReadTracerHook(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "read_tracer_hook",
-            description: "Read a tracer hook's full body, including its JS handler code. Use this only when you intend to read or edit the code; list_tracer_hooks is cheaper for surveying hooks.",
+            description: "Read a tracer hook's full body, including its JS handler code. The result includes `line_count` so you can target edit_tracer_hook precisely (lines are 1-based). Use this only when you intend to read or edit the code; list_tracer_hooks is cheaper for surveying hooks.",
             inputSchemaJSON: """
                 {"type":"object","properties":{"session_id":{"type":"string"},"hook_id":{"type":"string"}},"required":["session_id","hook_id"],"additionalProperties":false}
                 """,
@@ -1500,6 +1501,7 @@ public enum MissionTools {
             }
             var payload = hookListEntry(hook)
             payload["code"] = hook.code
+            payload["line_count"] = lineCount(of: hook.code)
             return makeResult(jsonObject: payload, summary: "Hook \(hook.displayName)")
         }
     }
@@ -1541,6 +1543,59 @@ public enum MissionTools {
                 return errorResult("no tracer hook with id \(hookID)", code: .notFound)
             }
             return makeResult(jsonObject: hookListEntry(updated), summary: "Updated hook \(updated.displayName)")
+        }
+    }
+
+    private static func registerEditTracerHook(in catalog: ToolCatalog, engine: Engine) {
+        let spec = ActionSpec(
+            name: "edit_tracer_hook",
+            description: """
+                Replace a contiguous range of lines in a tracer hook's JS handler. Lines are 1-based and inclusive; \
+                `start_line` is the first line replaced and `end_line` is the last. To insert without replacing, pass \
+                `end_line = start_line - 1`; to append, use `start_line = line_count + 1, end_line = line_count`. \
+                `new_content` may span multiple lines and does not need a trailing newline. Prefer this over \
+                update_tracer_hook's `code` field for targeted edits.
+                """,
+            inputSchemaJSON: """
+                {"type":"object","properties":{"session_id":{"type":"string"},"hook_id":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":0},"new_content":{"type":"string"}},"required":["session_id","hook_id","start_line","end_line","new_content"],"additionalProperties":false}
+                """,
+            isObserve: false,
+            requiresSession: true
+        )
+        catalog.register(spec: spec) { [weak engine] invocation in
+            guard let engine, let sessionID = parseSessionID(invocation.args) else {
+                return errorResult("missing or invalid session_id", code: .invalidInput)
+            }
+            guard let hookID = (invocation.args["hook_id"] as? String).flatMap(UUID.init(uuidString:)) else {
+                return errorResult("missing or invalid hook_id", code: .invalidInput)
+            }
+            guard let startLine = invocation.args["start_line"] as? Int else {
+                return errorResult("missing or invalid start_line", code: .invalidInput)
+            }
+            guard let endLine = invocation.args["end_line"] as? Int else {
+                return errorResult("missing or invalid end_line", code: .invalidInput)
+            }
+            guard let newContent = invocation.args["new_content"] as? String else {
+                return errorResult("missing new_content", code: .invalidInput)
+            }
+            guard let existing = engine.tracerHook(sessionID: sessionID, hookID: hookID) else {
+                return errorResult("no tracer hook with id \(hookID)", code: .notFound)
+            }
+            let updatedCode: String
+            switch spliceLines(in: existing.code, startLine: startLine, endLine: endLine, replacement: newContent) {
+            case .success(let result):
+                updatedCode = result
+            case .failure(let message):
+                return errorResult(message, code: .invalidInput)
+            }
+            guard let updated = await engine.updateTracerHook(sessionID: sessionID, hookID: hookID, { hook in
+                hook.updateCode(updatedCode)
+            }) else {
+                return errorResult("no tracer hook with id \(hookID)", code: .notFound)
+            }
+            var payload = hookListEntry(updated)
+            payload["line_count"] = lineCount(of: updatedCode)
+            return makeResult(jsonObject: payload, summary: "Edited hook \(updated.displayName) lines \(startLine)–\(endLine)")
         }
     }
 
