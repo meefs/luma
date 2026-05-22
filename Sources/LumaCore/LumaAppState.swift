@@ -47,6 +47,7 @@ public final class LumaAppState {
         var recentPaths: [String] = []
         var providerBaseURLs: [String: String]?
         var missionDefaults: MissionDefaults?
+        var externalMCPTrustsClient: Bool?
     }
 
     private var stored: Stored
@@ -130,6 +131,15 @@ public final class LumaAppState {
         set {
             guard stored.missionDefaults != newValue else { return }
             stored.missionDefaults = newValue
+            persist()
+        }
+    }
+
+    public var externalMCPTrustsClient: Bool {
+        get { stored.externalMCPTrustsClient ?? false }
+        set {
+            guard stored.externalMCPTrustsClient != newValue else { return }
+            stored.externalMCPTrustsClient = newValue
             persist()
         }
     }

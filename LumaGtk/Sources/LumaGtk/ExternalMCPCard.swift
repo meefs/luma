@@ -16,6 +16,7 @@ final class ExternalMCPCard {
     private let urlValueLabel: Label
     private let tokenValueLabel: Label
     private let descriptionLabel: Label
+    private let trustToggle: Switch
     private let errorLabel: Label
 
     private var isToggling = false {
@@ -32,6 +33,7 @@ final class ExternalMCPCard {
         runningBox = Box(orientation: .vertical, spacing: 4)
         urlValueLabel = Label(str: "")
         tokenValueLabel = Label(str: "")
+        trustToggle = Switch()
         errorLabel = Label(str: "")
 
         widget.add(cssClass: "card")
@@ -111,6 +113,21 @@ final class ExternalMCPCard {
         actions.append(child: rotateButton)
 
         runningBox.append(child: actions)
+
+        let trustRow = Box(orientation: .horizontal, spacing: 8)
+        let trustLabel = Label(str: "Trust client approvals")
+        trustLabel.halign = .start
+        trustLabel.hexpand = true
+        trustLabel.tooltipText = "Turn on when your MCP client (e.g. Claude Code) already prompts for each tool call, to avoid approving twice."
+        trustRow.append(child: trustLabel)
+        trustToggle.active = engine.externalMCPTrustsClient
+        trustToggle.tooltipText = trustLabel.tooltipText
+        trustToggle.onStateSet { [weak self] _, state in
+            MainActor.assumeIsolated { self?.engine?.externalMCPTrustsClient = state }
+            return false
+        }
+        trustRow.append(child: trustToggle)
+        inner.append(child: trustRow)
 
         errorLabel.halign = .start
         errorLabel.wrap = true

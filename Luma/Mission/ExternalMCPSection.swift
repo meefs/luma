@@ -10,6 +10,7 @@ struct ExternalMCPSection: View {
 
     @State private var isToggling = false
     @State private var lastError: String?
+    @State private var trustsClient: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -42,6 +43,13 @@ struct ExternalMCPSection: View {
                     .foregroundStyle(.secondary)
             }
 
+            Toggle("Trust client approvals (skip action queue for write tools)", isOn: $trustsClient)
+                .onChange(of: trustsClient) { _, newValue in
+                    engine.externalMCPTrustsClient = newValue
+                }
+                .help("Turn on when your MCP client (e.g. Claude Code) already prompts for each tool call, to avoid approving twice.")
+                .font(.caption)
+
             if let lastError {
                 Text(lastError)
                     .font(.caption)
@@ -50,6 +58,7 @@ struct ExternalMCPSection: View {
         }
         .padding()
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onAppear { trustsClient = engine.externalMCPTrustsClient }
     }
 
     @ViewBuilder

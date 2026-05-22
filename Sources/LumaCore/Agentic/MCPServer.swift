@@ -13,6 +13,7 @@ public final class MCPServer {
 
     public var onToolStarted: ToolCallObserver?
     public var onToolFinished: ToolResultObserver?
+    public var trustsClientApprovals: Bool = false
     public let bearerToken: String
 
     private weak var engine: Engine?
@@ -178,7 +179,7 @@ public final class MCPServer {
             toolCallID: toolCallID
         )
 
-        if !spec.isObserve {
+        if !spec.isObserve, !trustsClientApprovals {
             try? engine.store.save(action)
             engine.collaboration.enqueueMissionAction(action)
 

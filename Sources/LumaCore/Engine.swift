@@ -5028,6 +5028,14 @@ public final class Engine {
 
     public var isExternalMCPRunning: Bool { externalMCPServer != nil }
 
+    public var externalMCPTrustsClient: Bool {
+        get { LumaAppState.shared.externalMCPTrustsClient }
+        set {
+            LumaAppState.shared.externalMCPTrustsClient = newValue
+            externalMCPServer?.trustsClientApprovals = newValue
+        }
+    }
+
     @discardableResult
     public func enableExternalMCPServer() async throws -> ExternalMCPInfo {
         if let server = externalMCPServer, let url = externalMCPURL, let id = externalMCPMissionID {
@@ -5059,6 +5067,7 @@ public final class Engine {
             toolNames: toolNames,
             bearerToken: token
         )
+        server.trustsClientApprovals = LumaAppState.shared.externalMCPTrustsClient
         let url = try await server.start(preferredPort: preferredPort)
         externalMCPServer = server
         externalMCPURL = url
