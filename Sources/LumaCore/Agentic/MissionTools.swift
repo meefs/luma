@@ -3418,9 +3418,9 @@ public enum MissionTools {
     private static func registerReadWidgetState(in catalog: ToolCatalog, engine: Engine) {
         let spec = ActionSpec(
             name: "read_widget_state",
-            description: "Read the current cached state of a widget on a running instrument instance. Returns graph series points, list items, table rows, counter value, histogram buckets, or hex bytes (base64) — whichever the widget is. Useful when an LLM-driven mission wants to inspect what its instrument has surfaced.",
+            description: "Read the current cached state of a widget on a running instrument instance. Returns graph series points, list items, table rows, counter value, histogram buckets, hex bytes (base64), or console entries — whichever the widget is. Console image entries are delivered as image attachments; pass `image_options.max_dimension` (longest edge, default 1568, min 64) to cap resolution and token cost.",
             inputSchemaJSON: """
-                {"type":"object","properties":{"session_id":{"type":"string"},"instance_id":{"type":"string"},"widget":{"type":"string"}},"required":["session_id","instance_id","widget"],"additionalProperties":false}
+                {"type":"object","properties":{"session_id":{"type":"string"},"instance_id":{"type":"string"},"widget":{"type":"string"},"image_options":{"type":"object","properties":{"max_dimension":{"type":"integer","minimum":64,"default":1568,"description":"Longest edge in pixels. Larger images are scaled down before being returned as attachments."}},"additionalProperties":false}},"required":["session_id","instance_id","widget"],"additionalProperties":false}
                 """,
             isObserve: true,
             requiresSession: true
@@ -3437,12 +3437,36 @@ public enum MissionTools {
             guard let widgetID = invocation.args["widget"] as? String, !widgetID.isEmpty else {
                 return errorResult("missing widget", code: .invalidInput)
             }
+            let maxDimension = parseImageMaxDimension(invocation.args["image_options"])
             let state = engine.widgetState(instanceID: instanceID, widget: widgetID)
-            return makeResult(jsonObject: widgetStateJSON(state), summary: "Read state of widget \(widgetID)")
+            let (payload, attachments) = widgetStatePayload(
+                state,
+                imageProcessor: engine.imageProcessor,
+                maxDimension: maxDimension
+            )
+            return makeResult(
+                jsonObject: payload,
+                attachments: attachments,
+                summary: "Read state of widget \(widgetID)"
+            )
         }
     }
 
-    private static func widgetStateJSON(_ state: WidgetState) -> [String: Any] {
+    private static let defaultImageMaxDimension = 1568
+
+    private static func parseImageMaxDimension(_ raw: Any?) -> Int {
+        guard let obj = raw as? [String: Any],
+            let value = obj["max_dimension"] as? Int,
+            value >= 64
+        else { return defaultImageMaxDimension }
+        return value
+    }
+
+    private static func widgetStatePayload(
+        _ state: WidgetState,
+        imageProcessor: ImageProcessor?,
+        maxDimension: Int
+    ) -> (payload: [String: Any], attachments: [LLMAttachment]) {
         var points: [[String: Any]] = []
         for (seriesID, seriesPoints) in state.graphSeries {
             for point in seriesPoints {
@@ -3459,11 +3483,23 @@ public enum MissionTools {
             ["id": row.id, "cells": row.cells]
         }
         let buckets = state.histogram.map { ["label": $0.label, "count": $0.count] }
+
+        var attachments: [LLMAttachment] = []
+        let consoleEntries = state.consoleEntries.map { entry -> [String: Any] in
+            consoleEntryPayload(
+                entry,
+                imageProcessor: imageProcessor,
+                maxDimension: maxDimension,
+                attachments: &attachments
+            )
+        }
+
         var obj: [String: Any] = [
             "points": points,
             "items": items,
             "rows": rows,
             "buckets": buckets,
+            "entries": consoleEntries,
         ]
         if let counter = state.counter {
             var counterObj: [String: Any] = ["value": counter.value]
@@ -3475,6 +3511,48 @@ public enum MissionTools {
             obj["hex"] = [
                 "bytes": hex.bytes.base64EncodedString(),
                 "base_address": String(format: "0x%llx", hex.baseAddress),
+            ]
+        }
+        return (obj, attachments)
+    }
+
+    private static func consoleEntryPayload(
+        _ entry: WidgetConsoleEntry,
+        imageProcessor: ImageProcessor?,
+        maxDimension: Int,
+        attachments: inout [LLMAttachment]
+    ) -> [String: Any] {
+        var obj: [String: Any] = [
+            "id": entry.id,
+            "kind": entry.kind.rawValue,
+            "text": entry.text,
+        ]
+        if let replyTo = entry.replyTo { obj["reply_to"] = replyTo }
+        if let image = entry.image {
+            let attachmentID = "attachment-\(attachments.count + 1)"
+            let processed = imageProcessor?.scaleDown(
+                data: image.data,
+                mediaType: image.mediaType,
+                maxDimension: maxDimension
+            )
+            let delivered = processed ?? ProcessedImage(
+                mediaType: image.mediaType,
+                data: image.data,
+                width: image.width,
+                height: image.height
+            )
+            attachments.append(LLMAttachment(
+                kind: .image,
+                mediaType: delivered.mediaType,
+                base64: delivered.data.base64EncodedString()
+            ))
+            obj["image"] = [
+                "attachment_id": attachmentID,
+                "media_type": delivered.mediaType,
+                "width": delivered.width,
+                "height": delivered.height,
+                "original_width": image.width,
+                "original_height": image.height,
             ]
         }
         return obj
@@ -3714,7 +3792,11 @@ public enum MissionTools {
         return result
     }
 
-    private static func makeResult(jsonObject: Any, summary: String) -> ActionResult {
+    private static func makeResult(
+        jsonObject: Any,
+        attachments: [LLMAttachment] = [],
+        summary: String
+    ) -> ActionResult {
         let scrubbed = truncatingOversizedStrings(jsonObject, cap: stringValueByteCap)
         let data = (try? JSONSerialization.data(withJSONObject: scrubbed, options: [.sortedKeys])) ?? Data("{}".utf8)
         var json = String(data: data, encoding: .utf8) ?? "{}"
@@ -3722,7 +3804,7 @@ public enum MissionTools {
             json = String(json.prefix(resultByteCap))
             json += "\n/* truncated — request a narrower view */"
         }
-        return ActionResult(summary: summary, resultJSON: json)
+        return ActionResult(summary: summary, resultJSON: json, attachments: attachments)
     }
 
     private static func truncatingOversizedStrings(_ value: Any, cap: Int) -> Any {

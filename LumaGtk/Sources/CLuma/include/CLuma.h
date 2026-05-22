@@ -81,13 +81,17 @@ bool luma_image_normalize(const unsigned char *in_bytes,
                            size_t in_size,
                            int max_dimension,
                            unsigned char **out_bytes,
-                           size_t *out_size);
+                           size_t *out_size,
+                           int *out_width,
+                           int *out_height);
 
 bool luma_image_normalize_to_png(const unsigned char *in_bytes,
                                   size_t in_size,
                                   int max_dimension,
                                   unsigned char **out_bytes,
-                                  size_t *out_size);
+                                  size_t *out_size,
+                                  int *out_width,
+                                  int *out_height);
 
 // Welcome window animated GPU backdrop. Returns a new GtkGLArea
 // (as a GtkWidget*) that renders rising coral/plum motes over a

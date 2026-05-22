@@ -22,6 +22,7 @@ struct PhoneMainView: View {
                 dataDirectory: LumaAppPaths.shared.dataDirectory,
                 gitHubAuth: sharedGitHubAuth()
             )
+            engine.imageProcessor = HostImageProcessor()
             result = .success(engine)
         } catch {
             result = .failure(error)

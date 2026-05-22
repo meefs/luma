@@ -52,11 +52,13 @@ public struct ActionSpec: Sendable {
 public struct ActionResult: Sendable {
     public var summary: String
     public var resultJSON: String
+    public var attachments: [LLMAttachment]
     public var isError: Bool
 
-    public init(summary: String, resultJSON: String, isError: Bool = false) {
+    public init(summary: String, resultJSON: String, attachments: [LLMAttachment] = [], isError: Bool = false) {
         self.summary = summary
         self.resultJSON = resultJSON
+        self.attachments = attachments
         self.isError = isError
     }
 }

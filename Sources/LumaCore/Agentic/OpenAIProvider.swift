@@ -252,7 +252,7 @@ private func openAIUserMessages(blocks: [LLMContentBlock]) -> [[String: Any]] {
         case .text(let t):
             if !pendingText.isEmpty { pendingText.append("\n\n") }
             pendingText.append(t)
-        case .toolResult(let id, let content, _):
+        case .toolResult(let id, let content, _, let attachments):
             if !pendingText.isEmpty {
                 out.append(["role": "user", "content": pendingText])
                 pendingText = ""
@@ -262,6 +262,21 @@ private func openAIUserMessages(blocks: [LLMContentBlock]) -> [[String: Any]] {
                 "tool_call_id": id,
                 "content": content,
             ])
+            if !attachments.isEmpty {
+                var parts: [[String: Any]] = [[
+                    "type": "text",
+                    "text": "Attachments for the preceding tool result:",
+                ]]
+                for attachment in attachments where attachment.kind == .image {
+                    parts.append([
+                        "type": "image_url",
+                        "image_url": [
+                            "url": "data:\(attachment.mediaType);base64,\(attachment.base64)",
+                        ],
+                    ])
+                }
+                out.append(["role": "user", "content": parts])
+            }
         default:
             break
         }

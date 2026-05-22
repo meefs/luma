@@ -248,13 +248,15 @@ final class LumaApplication {
             directory: workingURL.appendingPathComponent("traces", isDirectory: true)
         )
         let eventStore = EventStore(fileURL: workingURL.appendingPathComponent("events.log"))
-        return Engine(
+        let engine = Engine(
             store: store,
             traces: traces,
             eventStore: eventStore,
             dataDirectory: LumaAppPaths.shared.dataDirectory,
             gitHubAuth: ensuredWelcomeModel().gitHubAuth
         )
+        engine.imageProcessor = HostImageProcessor()
+        return engine
     }
 
     private func recordDocumentOpened(_ document: LumaDocument) {

@@ -207,12 +207,27 @@ public struct AnthropicProvider: LLMProvider {
         case .toolUse(let id, let name, let inputJSON):
             let input = (try? JSONSerialization.jsonObject(with: Data(inputJSON.utf8))) ?? [:]
             return ["type": "tool_use", "id": id, "name": name, "input": input]
-        case .toolResult(let toolUseID, let contentJSON, let isError):
+        case .toolResult(let toolUseID, let contentJSON, let isError, let attachments):
             var obj: [String: Any] = [
                 "type": "tool_result",
                 "tool_use_id": toolUseID,
-                "content": contentJSON,
             ]
+            if attachments.isEmpty {
+                obj["content"] = contentJSON
+            } else {
+                var blocks: [[String: Any]] = [["type": "text", "text": contentJSON]]
+                for attachment in attachments where attachment.kind == .image {
+                    blocks.append([
+                        "type": "image",
+                        "source": [
+                            "type": "base64",
+                            "media_type": attachment.mediaType,
+                            "data": attachment.base64,
+                        ],
+                    ])
+                }
+                obj["content"] = blocks
+            }
             if isError { obj["is_error"] = true }
             return obj
         case .thinking(let text, let signature):

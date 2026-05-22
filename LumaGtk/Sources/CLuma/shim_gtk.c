@@ -299,7 +299,9 @@ luma_image_normalize(const unsigned char *in_bytes,
                       size_t in_size,
                       int max_dimension,
                       unsigned char **out_bytes,
-                      size_t *out_size)
+                      size_t *out_size,
+                      int *out_width,
+                      int *out_height)
 {
     GdkPixbuf *pixbuf = load_and_scale(in_bytes, in_size, max_dimension);
     if (!pixbuf) return false;
@@ -308,6 +310,10 @@ luma_image_normalize(const unsigned char *in_bytes,
     gsize buf_len = 0;
     gboolean ok = gdk_pixbuf_save_to_buffer(
         pixbuf, &buf, &buf_len, "jpeg", NULL, "quality", "85", NULL);
+    if (ok) {
+        if (out_width) *out_width = gdk_pixbuf_get_width(pixbuf);
+        if (out_height) *out_height = gdk_pixbuf_get_height(pixbuf);
+    }
     g_object_unref(pixbuf);
     if (!ok) return false;
 
@@ -321,7 +327,9 @@ luma_image_normalize_to_png(const unsigned char *in_bytes,
                              size_t in_size,
                              int max_dimension,
                              unsigned char **out_bytes,
-                             size_t *out_size)
+                             size_t *out_size,
+                             int *out_width,
+                             int *out_height)
 {
     GdkPixbuf *pixbuf = load_and_scale(in_bytes, in_size, max_dimension);
     if (!pixbuf) return false;
@@ -330,6 +338,10 @@ luma_image_normalize_to_png(const unsigned char *in_bytes,
     gsize buf_len = 0;
     gboolean ok = gdk_pixbuf_save_to_buffer(
         pixbuf, &buf, &buf_len, "png", NULL, NULL);
+    if (ok) {
+        if (out_width) *out_width = gdk_pixbuf_get_width(pixbuf);
+        if (out_height) *out_height = gdk_pixbuf_get_height(pixbuf);
+    }
     g_object_unref(pixbuf);
     if (!ok) return false;
 

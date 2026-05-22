@@ -29,6 +29,7 @@ export interface WidgetHandle {
     appendOutput(text: string): void;
     appendError(text: string): void;
     appendValue(value: unknown): void;
+    appendImage(image: ConsoleImage): void;
     clear(): void;
 }
 
@@ -72,6 +73,14 @@ export interface ConsoleEntry {
     text: string;
 }
 
+export interface ConsoleImage {
+    bytes: ArrayBuffer | Uint8Array | number[];
+    mediaType: string;
+    width: number;
+    height: number;
+    text?: string;
+}
+
 export interface WidgetAction {
     widget: string;
     action: string;
@@ -88,6 +97,7 @@ export interface ConsoleResponder {
     output(text: string): void;
     error(text: string): void;
     value(v: unknown): void;
+    image(img: ConsoleImage): void;
 }
 
 export interface InstrumentHandle<C = unknown> {
@@ -201,7 +211,12 @@ function makeConsoleResponder(
     replyTo: string
 ): ConsoleResponder {
     const postEntry = (
-        entry: { kind: "output" | "error"; text: string; value?: unknown },
+        entry: {
+            kind: "output" | "error" | "image";
+            text: string;
+            value?: unknown;
+            image?: { media_type: string; width: number; height: number };
+        },
         data: ArrayBuffer | null
     ) => {
         send({
@@ -213,6 +228,7 @@ function makeConsoleResponder(
                 kind: entry.kind,
                 text: entry.text,
                 value: entry.value,
+                image: entry.image,
                 reply_to: replyTo,
             },
         }, data);
@@ -228,7 +244,23 @@ function makeConsoleResponder(
             const [tree, blob] = encodeValue(v);
             postEntry({ kind: "output", text: "", value: tree }, blob);
         },
+        image(img) {
+            postEntry(
+                {
+                    kind: "image",
+                    text: img.text ?? "",
+                    image: { media_type: img.mediaType, width: img.width, height: img.height },
+                },
+                consoleImageBuffer(img.bytes)
+            );
+        },
     };
+}
+
+function consoleImageBuffer(bytes: ArrayBuffer | Uint8Array | number[]): ArrayBuffer {
+    if (bytes instanceof ArrayBuffer) return bytes;
+    if (bytes instanceof Uint8Array) return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    return new Uint8Array(bytes).buffer;
 }
 
 async function loadInstrumentModule(
@@ -333,6 +365,17 @@ function makeInstrumentContext(instanceId: string): InstrumentContext {
                         widget: id,
                         entry: { id: makeId(), kind: "output", text: "", value: tree },
                     }, blob);
+                },
+                appendImage(image) {
+                    post("widget-console-append", {
+                        widget: id,
+                        entry: {
+                            id: makeId(),
+                            kind: "image",
+                            text: image.text ?? "",
+                            image: { media_type: image.mediaType, width: image.width, height: image.height },
+                        },
+                    }, consoleImageBuffer(image.bytes));
                 },
                 clear() {
                     post("widget-clear", { widget: id });

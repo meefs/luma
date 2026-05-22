@@ -17,6 +17,7 @@ public struct MissionAction: Codable, Identifiable, Sendable, FetchableRecord, P
     public var completedAt: Date?
     public var resultJSON: String?
     public var resultSummary: String?
+    public var resultAttachmentsJSON: String?
     public var error: String?
     public var rationale: String?
     public var rejectionReason: String?
@@ -36,6 +37,7 @@ public struct MissionAction: Codable, Identifiable, Sendable, FetchableRecord, P
         case completedAt = "completed_at"
         case resultJSON = "result_json"
         case resultSummary = "result_summary"
+        case resultAttachmentsJSON = "result_attachments_json"
         case error
         case rationale
         case rejectionReason = "rejection_reason"
@@ -66,6 +68,7 @@ public struct MissionAction: Codable, Identifiable, Sendable, FetchableRecord, P
         self.completedAt = nil
         self.resultJSON = nil
         self.resultSummary = nil
+        self.resultAttachmentsJSON = nil
         self.error = nil
         self.rationale = rationale
         self.rejectionReason = nil

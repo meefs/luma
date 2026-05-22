@@ -1733,6 +1733,7 @@ public final class ProjectStore: Sendable {
             t.column("completed_at", .datetime)
             t.column("result_json", .text)
             t.column("result_summary", .text)
+            t.column("result_attachments_json", .text)
             t.column("error", .text)
             t.column("rationale", .text)
             t.column("rejection_reason", .text)

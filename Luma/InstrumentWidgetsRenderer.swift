@@ -392,6 +392,9 @@ private struct ConsoleWidgetView: View {
                 .foregroundStyle(.secondary)
         case .output:
             Text(" ")
+        case .image:
+            Image(systemName: "photo")
+                .foregroundStyle(.secondary)
         case .error:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
@@ -400,7 +403,18 @@ private struct ConsoleWidgetView: View {
 
     @ViewBuilder
     private func entryBody(_ entry: WidgetConsoleEntry) -> some View {
-        if let value = entry.value {
+        if let image = entry.image, let nsImage = NSImage(data: image.data) {
+            VStack(alignment: .leading, spacing: 2) {
+                if !entry.text.isEmpty {
+                    Text(entry.text).textSelection(.enabled)
+                }
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 480, maxHeight: 360, alignment: .leading)
+                    .cornerRadius(4)
+            }
+        } else if let value = entry.value {
             JSInspectValueView(
                 value: value,
                 sessionID: sessionID,
@@ -443,7 +457,7 @@ private struct ConsoleWidgetView: View {
         switch entry.kind {
         case .input:
             return entry.text
-        case .output, .error:
+        case .output, .image, .error:
             return widgetName
         }
     }

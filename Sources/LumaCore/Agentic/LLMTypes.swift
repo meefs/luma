@@ -4,10 +4,26 @@ import Foundation
 /// The shape mirrors Anthropic's content blocks because it's the most
 /// expressive of the three providers we support; OpenAI and OpenAI-compatible
 /// adapters translate to/from this shape.
+public struct LLMAttachment: Sendable, Codable, Hashable {
+    public enum Kind: String, Sendable, Codable {
+        case image
+    }
+
+    public var kind: Kind
+    public var mediaType: String
+    public var base64: String
+
+    public init(kind: Kind, mediaType: String, base64: String) {
+        self.kind = kind
+        self.mediaType = mediaType
+        self.base64 = base64
+    }
+}
+
 public enum LLMContent: Sendable, Codable, Hashable {
     case text(String)
     case toolUse(id: String, name: String, inputJSON: String)
-    case toolResult(toolUseID: String, contentJSON: String, isError: Bool)
+    case toolResult(toolUseID: String, contentJSON: String, isError: Bool, attachments: [LLMAttachment])
     case thinking(text: String, signature: String)
     case redactedThinking(data: String)
 
@@ -28,6 +44,7 @@ public enum LLMContent: Sendable, Codable, Hashable {
         case toolUseID = "tool_use_id"
         case content = "content_json"
         case isError = "is_error"
+        case attachments
         case signature
         case data
     }
@@ -48,7 +65,8 @@ public enum LLMContent: Sendable, Codable, Hashable {
             self = .toolResult(
                 toolUseID: try c.decode(String.self, forKey: .toolUseID),
                 contentJSON: try c.decode(String.self, forKey: .content),
-                isError: try c.decodeIfPresent(Bool.self, forKey: .isError) ?? false
+                isError: try c.decodeIfPresent(Bool.self, forKey: .isError) ?? false,
+                attachments: try c.decodeIfPresent([LLMAttachment].self, forKey: .attachments) ?? []
             )
         case .thinking:
             self = .thinking(
@@ -71,11 +89,12 @@ public enum LLMContent: Sendable, Codable, Hashable {
             try c.encode(id, forKey: .id)
             try c.encode(name, forKey: .name)
             try c.encode(input, forKey: .input)
-        case .toolResult(let id, let content, let isError):
+        case .toolResult(let id, let content, let isError, let attachments):
             try c.encode(Kind.toolResult, forKey: .kind)
             try c.encode(id, forKey: .toolUseID)
             try c.encode(content, forKey: .content)
             if isError { try c.encode(true, forKey: .isError) }
+            if !attachments.isEmpty { try c.encode(attachments, forKey: .attachments) }
         case .thinking(let text, let signature):
             try c.encode(Kind.thinking, forKey: .kind)
             try c.encode(text, forKey: .text)

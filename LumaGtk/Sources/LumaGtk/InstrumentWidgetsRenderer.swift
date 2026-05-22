@@ -1,6 +1,7 @@
 import Cairo
 import CGtk
 import Foundation
+import Gdk
 import Gtk
 import LumaCore
 import Pango
@@ -314,6 +315,9 @@ private final class ConsoleWidget {
         case .output:
             glyph = "\u{2190}"
             bodyCssClass = nil
+        case .image:
+            glyph = "\u{1F5BC}"
+            bodyCssClass = nil
         case .error:
             glyph = "!"
             bodyCssClass = "error"
@@ -369,12 +373,15 @@ private final class ConsoleWidget {
         switch entry.kind {
         case .input:
             return entry.text
-        case .output, .error:
+        case .output, .image, .error:
             return widgetName
         }
     }
 
     private func makeBody(for entry: WidgetConsoleEntry, cssClass: String?) -> Widget {
+        if let image = entry.image, let texture = IconPixbuf.makeTexture(fromEncodedData: image.data) {
+            return makeImageBody(text: entry.text, texture: texture)
+        }
         if let value = entry.value, let engine {
             let valueWidget = JSInspectValueWidget.make(value: value, engine: engine, sessionID: sessionID)
             valueWidgetKeepers.append(valueWidget)
@@ -388,6 +395,25 @@ private final class ConsoleWidget {
         body.wrap = true
         body.selectable = true
         return body
+    }
+
+    private func makeImageBody(text: String, texture: Gdk.Texture) -> Widget {
+        let box = Box(orientation: .vertical, spacing: 4)
+        box.halign = .start
+        if !text.isEmpty {
+            let caption = Label(str: text)
+            caption.add(cssClass: "monospace")
+            caption.halign = .start
+            caption.wrap = true
+            caption.selectable = true
+            box.append(child: caption)
+        }
+        let picture = Picture(paintable: texture)
+        picture.canShrink = true
+        picture.contentFit = .scaleDown
+        picture.halign = .start
+        box.append(child: picture)
+        return box
     }
 
     private static func makeEmptyState() -> Widget {

@@ -358,7 +358,7 @@ private func renderBlockEntry(
             action: actions[id]
         )
         return TurnBlockEntry(block: block, widget: toolBlock.widget, toolBlock: toolBlock)
-    case .toolResult(_, let content, let isError):
+    case .toolResult(_, let content, let isError, _):
         let widget = MissionToolResultBlock.make(content: content, isError: isError)
         return TurnBlockEntry(block: block, widget: widget, toolBlock: nil)
     }

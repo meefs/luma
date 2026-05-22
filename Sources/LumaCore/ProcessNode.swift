@@ -607,15 +607,26 @@ public final class ProcessNode: Identifiable {
             let kind = WidgetConsoleEntry.Kind(rawValue: kindStr)
         else { return nil }
         let text = (entryObj["text"] as? String) ?? ""
-        let value = decodeConsoleEntryValue(entryObj["value"], data: data)
+        let image = decodeConsoleEntryImage(entryObj["image"], data: data)
+        let value = image == nil ? decodeConsoleEntryValue(entryObj["value"], data: data) : nil
         let replyTo = entryObj["reply_to"] as? String
-        let entry = WidgetConsoleEntry(id: id, kind: kind, text: text, value: value, replyTo: replyTo)
+        let entry = WidgetConsoleEntry(id: id, kind: kind, text: text, value: value, image: image, replyTo: replyTo)
         return WidgetUpdate(instanceID: context.instanceID, widget: context.widget, kind: .consoleAppend(entry))
     }
 
     private func decodeConsoleEntryValue(_ raw: Any?, data: [UInt8]?) -> JSInspectValue? {
         guard let raw else { return nil }
         return try? JSInspectValue.decodePacked(tree: raw, blobBytes: data)
+    }
+
+    private func decodeConsoleEntryImage(_ raw: Any?, data: [UInt8]?) -> ConsoleImage? {
+        guard let obj = raw as? [String: Any],
+            let mediaType = obj["media_type"] as? String,
+            let width = obj["width"] as? Int,
+            let height = obj["height"] as? Int,
+            let bytes = data
+        else { return nil }
+        return ConsoleImage(mediaType: mediaType, data: Data(bytes), width: width, height: height)
     }
 
     private func decodeConsoleReplyDoneUpdate(_ dict: [String: Any]) -> WidgetUpdate? {

@@ -197,6 +197,7 @@ public final class MissionExecutor {
             completed.status = result.isError ? .failed : .succeeded
             completed.resultJSON = result.resultJSON
             completed.resultSummary = result.summary
+            completed.resultAttachmentsJSON = encodeAttachments(result.attachments)
             if result.isError { completed.error = result.summary }
         } catch {
             completed.status = .failed
@@ -385,10 +386,20 @@ public final class MissionExecutor {
                 content = "(no result yet)"
                 isError = true
             }
+            let attachments: [LLMAttachment]
+            if let json = action.resultAttachmentsJSON,
+               let data = json.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode([LLMAttachment].self, from: data)
+            {
+                attachments = decoded
+            } else {
+                attachments = []
+            }
             return LLMContentBlock(content: .toolResult(
                 toolUseID: action.toolCallID ?? action.id.uuidString,
                 contentJSON: content,
-                isError: isError
+                isError: isError,
+                attachments: attachments
             ))
         }
 
@@ -493,6 +504,12 @@ public final class MissionExecutor {
             collaboration?.enqueueMissionTurn(turn)
         }
     }
+}
+
+private func encodeAttachments(_ attachments: [LLMAttachment]) -> String? {
+    if attachments.isEmpty { return nil }
+    guard let data = try? JSONEncoder().encode(attachments) else { return nil }
+    return String(data: data, encoding: .utf8)
 }
 
 private extension JSONEncoder {

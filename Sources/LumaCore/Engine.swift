@@ -30,6 +30,7 @@ public final class Engine {
     public let llmRegistry: LLMProviderRegistry
     public let llmCredentials: LLMCredentialStore
     public let missionTools: ToolCatalog
+    public var imageProcessor: ImageProcessor?
     private let missionExecutor: MissionExecutor
 
     private var activeNoteReplyTasks: [UUID: Task<AddressNoteMessage?, Never>] = [:]
@@ -698,7 +699,8 @@ public final class Engine {
             results.append(LLMContentBlock(content: .toolResult(
                 toolUseID: id,
                 contentJSON: json,
-                isError: isError
+                isError: isError,
+                attachments: []
             )))
         }
         return results

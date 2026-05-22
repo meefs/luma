@@ -252,7 +252,7 @@ public final class ClaudeCodeProvider: LLMProvider {
             let text = message.blocks.compactMap { block -> String? in
                 switch block.content {
                 case .text(let t): return t
-                case .toolResult(_, let content, _): return "[tool result]\n\(content)"
+                case .toolResult(_, let content, _, _): return "[tool result]\n\(content)"
                 default: return nil
                 }
             }.joined(separator: "\n")

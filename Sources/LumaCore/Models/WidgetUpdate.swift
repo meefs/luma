@@ -249,10 +249,25 @@ public struct WidgetHexState: Codable, Sendable, Equatable {
     }
 }
 
+public struct ConsoleImage: Codable, Sendable, Equatable {
+    public var mediaType: String
+    public var data: Data
+    public var width: Int
+    public var height: Int
+
+    public init(mediaType: String, data: Data, width: Int, height: Int) {
+        self.mediaType = mediaType
+        self.data = data
+        self.width = width
+        self.height = height
+    }
+}
+
 public struct WidgetConsoleEntry: Codable, Sendable, Equatable, Identifiable {
     public enum Kind: String, Codable, Sendable {
         case input
         case output
+        case image
         case error
     }
 
@@ -260,6 +275,7 @@ public struct WidgetConsoleEntry: Codable, Sendable, Equatable, Identifiable {
     public let kind: Kind
     public var text: String
     public var value: JSInspectValue?
+    public var image: ConsoleImage?
     public var replyTo: String?
 
     public init(
@@ -267,12 +283,14 @@ public struct WidgetConsoleEntry: Codable, Sendable, Equatable, Identifiable {
         kind: Kind,
         text: String,
         value: JSInspectValue? = nil,
+        image: ConsoleImage? = nil,
         replyTo: String? = nil
     ) {
         self.id = id
         self.kind = kind
         self.text = text
         self.value = value
+        self.image = image
         self.replyTo = replyTo
     }
 
@@ -286,6 +304,14 @@ public struct WidgetConsoleEntry: Codable, Sendable, Equatable, Identifiable {
            let valueJSON = try? JSONSerialization.jsonObject(with: encoded)
         {
             obj["value"] = valueJSON
+        }
+        if let image {
+            obj["image"] = [
+                "media_type": image.mediaType,
+                "data_base64": image.data.base64EncodedString(),
+                "width": image.width,
+                "height": image.height,
+            ]
         }
         if let replyTo { obj["reply_to"] = replyTo }
         return obj
@@ -303,9 +329,20 @@ public struct WidgetConsoleEntry: Codable, Sendable, Equatable, Identifiable {
         {
             value = try? JSONDecoder().decode(JSInspectValue.self, from: data)
         }
+        let image = (obj["image"] as? [String: Any]).flatMap(parseConsoleImage)
         let replyTo = obj["reply_to"] as? String
-        return WidgetConsoleEntry(id: id, kind: kind, text: text, value: value, replyTo: replyTo)
+        return WidgetConsoleEntry(id: id, kind: kind, text: text, value: value, image: image, replyTo: replyTo)
     }
+}
+
+private func parseConsoleImage(_ obj: [String: Any]) -> ConsoleImage? {
+    guard let mediaType = obj["media_type"] as? String,
+        let base64 = obj["data_base64"] as? String,
+        let data = Data(base64Encoded: base64),
+        let width = obj["width"] as? Int,
+        let height = obj["height"] as? Int
+    else { return nil }
+    return ConsoleImage(mediaType: mediaType, data: data, width: width, height: height)
 }
 
 public struct WidgetStateSnapshot: Sendable {

@@ -1204,7 +1204,7 @@ private func normalizeLabPicture(
     var outSize: Int = 0
     let ok = data.withUnsafeBytes { buffer -> Bool in
         guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return false }
-        return luma_image_normalize(base, buffer.count, 512, &outBytes, &outSize)
+        return luma_image_normalize(base, buffer.count, 512, &outBytes, &outSize, nil, nil)
     }
     if ok, let outBytes, outSize > 0 {
         defer { free(outBytes) }

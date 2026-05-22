@@ -174,7 +174,7 @@ private func normalizeIconImage(_ data: Data) -> Data? {
     var outSize: Int = 0
     let ok = data.withUnsafeBytes { buffer -> Bool in
         guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return false }
-        return luma_image_normalize_to_png(base, buffer.count, 128, &outBytes, &outSize)
+        return luma_image_normalize_to_png(base, buffer.count, 128, &outBytes, &outSize, nil, nil)
     }
     guard ok, let outBytes, outSize > 0 else { return nil }
     defer { free(outBytes) }

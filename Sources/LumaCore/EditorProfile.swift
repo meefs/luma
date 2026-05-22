@@ -524,10 +524,19 @@ public enum CustomInstrumentTypings {
             clear(): void;
         }
 
+        declare interface CustomInstrumentConsoleImage {
+            bytes: ArrayBuffer | Uint8Array | number[];
+            mediaType: string;
+            width: number;
+            height: number;
+            text?: string;
+        }
+
         declare interface CustomInstrumentConsoleWidget {
             appendOutput(text: string): void;
             appendError(text: string): void;
             appendValue(value: unknown): void;
+            appendImage(image: CustomInstrumentConsoleImage): void;
             appendConsole(entry: { id?: string, kind: "input" | "output" | "error", text: string }): void;
             clear(): void;
         }
@@ -555,6 +564,7 @@ public enum CustomInstrumentTypings {
             output(text: string): void;
             error(text: string): void;
             value(v: unknown): void;
+            image(image: CustomInstrumentConsoleImage): void;
         }
 
         declare type CustomFeatureValue = boolean | number | string | CustomFeatureValue[] | { [name: string]: CustomFeatureValue };

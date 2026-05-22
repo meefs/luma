@@ -113,7 +113,7 @@ private struct BlockView: View {
             Text("[redacted thinking]").italic().foregroundStyle(.secondary)
         case .toolUse(let id, let name, let inputJSON):
             ToolUseBlock(id: id, name: name, inputJSON: inputJSON, action: actions.first(where: { $0.toolCallID == id }))
-        case .toolResult(let id, let content, let isError):
+        case .toolResult(let id, let content, let isError, _):
             ToolResultBlock(toolUseID: id, content: content, isError: isError)
         }
     }
