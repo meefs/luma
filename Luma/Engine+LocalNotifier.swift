@@ -28,18 +28,26 @@
                 notifier.notifyChatMessage(message, labID: self.collaboration.labID)
             }
 
-            var seenPending: Set<UUID> = Set(((try? store.fetchAllPendingMissionActions()) ?? []).map(\.id))
+            let seenPending = PendingActionTracker(
+                initial: Set(((try? store.fetchAllPendingMissionActions()) ?? []).map(\.id))
+            )
             let observation = store.observeAllPendingMissionActions { rows in
                 Task { @MainActor in
                     let currentIDs = Set(rows.map(\.id))
-                    let arrivals = rows.filter { !seenPending.contains($0.id) }
-                    seenPending = currentIDs
+                    let arrivals = rows.filter { !seenPending.ids.contains($0.id) }
+                    seenPending.ids = currentIDs
                     guard let newest = arrivals.max(by: { $0.requestedAt < $1.requestedAt }) else { return }
                     notifier.notifyActionAwaitingApproval(newest, additionalPending: arrivals.count - 1)
                 }
             }
             pendingActionObservations[key] = observation
         }
+    }
+
+    @MainActor
+    private final class PendingActionTracker {
+        var ids: Set<UUID>
+        init(initial: Set<UUID>) { ids = initial }
     }
 
     @MainActor
