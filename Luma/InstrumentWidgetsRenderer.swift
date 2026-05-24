@@ -351,7 +351,7 @@ private struct ConsoleWidgetView: View {
                     }
                 }
             }
-            .frame(minHeight: 80, maxHeight: 220)
+            .frame(minHeight: 400)
 
             HStack(spacing: 6) {
                 Text(promptGlyph)
