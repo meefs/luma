@@ -1,31 +1,33 @@
 import { TraceBuffer, TraceBufferReader } from "frida-itrace";
 
-let reader: TraceBufferReader | null = null;
+const readers = new Map<string, TraceBufferReader>();
 
 rpc.exports = {
-    openBuffer(location: string) {
+    openBuffer(sessionId: string, location: string) {
         const buffer = TraceBuffer.open(location);
-        reader = new TraceBufferReader(buffer);
+        readers.set(sessionId, new TraceBufferReader(buffer));
     },
 
-    drain(): ArrayBuffer | null {
-        if (reader === null) {
+    drain(sessionId: string): ArrayBuffer | null {
+        const reader = readers.get(sessionId);
+        if (reader === undefined) {
             return null;
         }
         const chunk = reader.read();
         return chunk.byteLength > 0 ? chunk : null;
     },
 
-    getLost(): number {
-        return reader?.lost ?? 0;
+    getLost(sessionId: string): number {
+        return readers.get(sessionId)?.lost ?? 0;
     },
 
-    close(): ArrayBuffer | null {
-        if (reader === null) {
+    close(sessionId: string): ArrayBuffer | null {
+        const reader = readers.get(sessionId);
+        if (reader === undefined) {
             return null;
         }
         const chunk = reader.read();
-        reader = null;
+        readers.delete(sessionId);
         return chunk.byteLength > 0 ? chunk : null;
     },
 };

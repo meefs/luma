@@ -9,119 +9,112 @@ export type Origin =
     | { kind: "functionCall"; hookId: string; callIndex: number }
     | { kind: "thread"; threadId: number; threadName: string | null };
 
-interface ActiveSession {
-    sessionId: string;
-    buffer: TraceBuffer;
-    reader: TraceBufferReader;
-    session: TraceSession;
-    drainTimer: ReturnType<typeof setInterval> | null;
-    bytesDrained: number;
-}
+export type DrainMode = "system" | "in-agent";
 
-const active = new Map<string, ActiveSession>();
+export type PostMessage = (type: string, payload: object, data?: ArrayBuffer | null) => void;
 
-export interface StartOptions {
+export interface TraceOptions {
     sessionId: string;
     origin: Origin;
     target: TraceStrategy;
-    hookTarget?: string | null;
-    prologueBytes?: ArrayBuffer | null;
+    post: PostMessage;
     maxBytes?: number;
 }
 
-export function startSession(opts: StartOptions): void {
-    const buffer = TraceBuffer.create();
-    const session = new TraceSession(opts.target, buffer);
-    const reader = new TraceBufferReader(buffer);
+export interface StartDetails {
+    hookTarget?: string | null;
+    prologueBytes?: ArrayBuffer | null;
+}
 
-    const entry: ActiveSession = {
-        sessionId: opts.sessionId,
-        buffer,
-        reader,
-        session,
-        drainTimer: null,
-        bytesDrained: 0,
-    };
-    active.set(opts.sessionId, entry);
+const DRAIN_INTERVAL_MS = 100;
 
-    send({
-        type: "itrace:start",
-        sessionId: opts.sessionId,
-        origin: opts.origin,
-        bufferLocation: buffer.location,
-        hookTarget: opts.hookTarget ?? null,
-        prologueBytes: opts.prologueBytes !== undefined && opts.prologueBytes !== null
-            ? bufferToHex(opts.prologueBytes)
-            : null,
-    });
+let nextToken = 1;
 
-    session.open();
+/**
+ * One instruction trace with its own buffer. The buffer is mapped the instant
+ * the Trace is constructed, so its location reaches Luma — and Luma can remap
+ * it out-of-process — before open() arms Stalker and risks crashing the target.
+ */
+export class Trace {
+    readonly sessionId: string;
+    readonly origin: Origin;
 
-    if (opts.maxBytes !== undefined && opts.maxBytes > 0) {
-        const limit = opts.maxBytes;
-        entry.drainTimer = setInterval(() => {
-            const chunk = entry.reader.read();
+    #buffer: TraceBuffer;
+    #session: TraceSession;
+    #post: PostMessage;
+    #maxBytes: number;
+
+    #drainMode: DrainMode = "in-agent";
+    #reader: TraceBufferReader | null = null;
+    #drainTimer: ReturnType<typeof setInterval> | null = null;
+    #bytesDrained = 0;
+
+    constructor(opts: TraceOptions) {
+        this.sessionId = opts.sessionId;
+        this.origin = opts.origin;
+        this.#post = opts.post;
+        this.#maxBytes = opts.maxBytes ?? 0;
+        this.#buffer = TraceBuffer.create(this.#maxBytes > 0 ? { capacity: this.#maxBytes } : {});
+        this.#session = new TraceSession(opts.target, this.#buffer);
+    }
+
+    start(details: StartDetails, requestStop: () => void): void {
+        this.#drainMode = this.#negotiateDrain(details);
+        if (this.#drainMode === "in-agent") {
+            this.#reader = new TraceBufferReader(this.#buffer);
+            this.#startDrainTimer(requestStop);
+        }
+        this.#session.open();
+    }
+
+    stop(): void {
+        if (this.#drainTimer !== null) {
+            clearInterval(this.#drainTimer);
+            this.#drainTimer = null;
+        }
+
+        this.#session.close();
+
+        if (this.#reader !== null) {
+            const chunk = this.#reader.read();
+            this.#post("itrace:stop", { sessionId: this.sessionId, lost: this.#reader.lost },
+                chunk.byteLength > 0 ? chunk : null);
+        } else {
+            this.#post("itrace:stop", { sessionId: this.sessionId });
+        }
+    }
+
+    #negotiateDrain(details: StartDetails): DrainMode {
+        const token = nextToken++;
+        this.#post("itrace:start", {
+            token,
+            sessionId: this.sessionId,
+            origin: this.origin,
+            bufferLocation: this.#buffer.location,
+            hookTarget: details.hookTarget ?? null,
+            prologueBytes: details.prologueBytes ? bufferToHex(details.prologueBytes) : null,
+        });
+
+        let drain: DrainMode = "in-agent";
+        recv("itrace:ack:" + token, message => {
+            drain = message.drain;
+        }).wait();
+        return drain;
+    }
+
+    #startDrainTimer(requestStop: () => void): void {
+        const reader = this.#reader!;
+        this.#drainTimer = setInterval(() => {
+            const chunk = reader.read();
             if (chunk.byteLength > 0) {
-                entry.bytesDrained += chunk.byteLength;
-                send({
-                    type: "itrace:chunk",
-                    sessionId: entry.sessionId,
-                    lost: entry.reader.lost,
-                }, chunk);
+                this.#bytesDrained += chunk.byteLength;
+                this.#post("itrace:chunk", { sessionId: this.sessionId, lost: reader.lost }, chunk);
             }
-            if (entry.bytesDrained >= limit) {
-                stopSession(entry.sessionId);
+            if (this.#maxBytes > 0 && this.#bytesDrained >= this.#maxBytes) {
+                requestStop();
             }
-        }, 100);
+        }, DRAIN_INTERVAL_MS);
     }
-}
-
-export function stopSession(sessionId: string): void {
-    const a = active.get(sessionId);
-    if (a === undefined) {
-        return;
-    }
-    active.delete(sessionId);
-
-    if (a.drainTimer !== null) {
-        clearInterval(a.drainTimer);
-    }
-
-    a.session.close();
-    const chunk = a.reader.read();
-
-    send({
-        type: "itrace:stop",
-        sessionId,
-        lost: a.reader.lost,
-    }, chunk.byteLength > 0 ? chunk : null);
-}
-
-export function drainLocally(sessionId: string): void {
-    const a = active.get(sessionId);
-    if (a === undefined) {
-        return;
-    }
-    const chunk = a.reader.read();
-    if (chunk.byteLength > 0) {
-        send({
-            type: "itrace:chunk",
-            sessionId,
-            lost: a.reader.lost,
-        }, chunk);
-    }
-}
-
-export function startThreadTrace(opts: { sessionId: string; threadId: number; threadName: string | null }): void {
-    startSession({
-        sessionId: opts.sessionId,
-        origin: { kind: "thread", threadId: opts.threadId, threadName: opts.threadName },
-        target: { type: "thread", threadId: opts.threadId },
-    });
-}
-
-export function stopThreadTrace(opts: { sessionId: string }): void {
-    stopSession(opts.sessionId);
 }
 
 function bufferToHex(buf: ArrayBuffer): string {

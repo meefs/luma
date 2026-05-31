@@ -1,7 +1,6 @@
 import "./console.js";
 import * as env from "./env.js";
 import * as instrument from "./instrument.js";
-import * as itrace from "./itrace.js";
 import * as memory from "./memory.js";
 import * as modules from "./modules.js";
 import * as pkg from "./pkg.js";
@@ -13,7 +12,6 @@ import * as threads from "./threads.js";
 rpc.exports = {
     ...env,
     ...instrument,
-    ...itrace,
     ...memory,
     ...modules,
     ...pkg,

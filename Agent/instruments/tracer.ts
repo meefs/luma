@@ -1,11 +1,18 @@
 import type _Java from "frida-java-bridge";
 import type { Instrument, InstrumentContext } from '../core/instrument.js';
 import { loadJavaBridge, resolveAnchor, type AnchorJSON } from '../core/resolver.js';
-import { startSession, stopSession } from '../core/itrace.js';
+import { Trace } from '../core/itrace.js';
 
 interface TracerConfig {
     hooks: TracerHookConfig[];
+    threadTraces?: ThreadTraceConfig[];
     callCounters?: Record<string, number>;
+}
+
+interface ThreadTraceConfig {
+    id: string;
+    threadId: number;
+    threadName: string | null;
 }
 
 type HookState = "enabled" | "disabled";
@@ -60,11 +67,14 @@ class Tracer {
     #prologueBackups = new Map<string, ArrayBuffer>();
     #stackDepth = new Map<ThreadId, number>();
     #callCounters = new Map<string, number>();
+    #activeTraces = new Map<string, Trace>();
+    #post: (type: string, payload: object, data?: ArrayBuffer | null) => void;
     #started = Date.now();
 
     constructor(ctx: InstrumentContext, config: TracerConfig) {
         this.#ctx = ctx;
         this.#config = config;
+        this.#post = ctx.post;
 
         if (config.callCounters !== undefined) {
             for (const [id, count] of Object.entries(config.callCounters)) {
@@ -80,6 +90,10 @@ class Tracer {
             hook[0]();
         }
         this.#hooks.clear();
+
+        for (const sessionId of [...this.#activeTraces.keys()]) {
+            this.#stopTrace(sessionId);
+        }
     }
 
     async updateConfig(next: TracerConfig) {
@@ -137,6 +151,8 @@ class Tracer {
                 });
             }
         }
+
+        this.#applyThreadTraces(next.threadTraces ?? []);
 
         this.#config = next;
     }
@@ -253,15 +269,18 @@ class Tracer {
                             ? tracer.#prologueBackups.get(target.toString()) ?? null
                             : null;
                         const sessionId = `${config.id}:${callIndex}`;
-                        (this as any)._itraceSessionId = sessionId;
-                        startSession({
+                        const trace = new Trace({
                             sessionId,
                             origin: { kind: "functionCall", hookId: config.id, callIndex },
                             target: { type: "thread", threadId: this.threadId },
-                            hookTarget: target?.toString() ?? null,
-                            prologueBytes: prologueBackup,
+                            post: tracer.#post,
                             maxBytes: arming.maxBytesPerInvocation,
                         });
+                        tracer.#activeTraces.set(sessionId, trace);
+                        (this as any)._itraceSessionId = sessionId;
+                        trace.start(
+                            { hookTarget: target?.toString() ?? null, prologueBytes: prologueBackup },
+                            () => tracer.#stopTrace(sessionId));
                     }
                 }
 
@@ -273,7 +292,7 @@ class Tracer {
 
                 const sessionId = (this as any)._itraceSessionId as string | undefined;
                 if (sessionId !== undefined) {
-                    stopSession(sessionId);
+                    tracer.#stopTrace(sessionId);
                     (this as any)._itraceSessionId = undefined;
                 }
             }
@@ -352,6 +371,39 @@ class Tracer {
         }
 
         return depth;
+    }
+
+    #applyThreadTraces(next: ThreadTraceConfig[]) {
+        const desired = new Set(next.map(t => t.id));
+
+        for (const [sessionId, trace] of this.#activeTraces) {
+            if (trace.origin.kind === "thread" && !desired.has(sessionId)) {
+                this.#stopTrace(sessionId);
+            }
+        }
+
+        for (const config of next) {
+            if (this.#activeTraces.has(config.id)) {
+                continue;
+            }
+            const trace = new Trace({
+                sessionId: config.id,
+                origin: { kind: "thread", threadId: config.threadId, threadName: config.threadName },
+                target: { type: "thread", threadId: config.threadId },
+                post: this.#post,
+            });
+            this.#activeTraces.set(config.id, trace);
+            trace.start({}, () => this.#stopTrace(config.id));
+        }
+    }
+
+    #stopTrace(sessionId: string) {
+        const trace = this.#activeTraces.get(sessionId);
+        if (trace === undefined) {
+            return;
+        }
+        this.#activeTraces.delete(sessionId);
+        trace.stop();
     }
 }
 

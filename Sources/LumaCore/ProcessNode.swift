@@ -102,13 +102,12 @@ public final class ProcessNode: Identifiable {
 
     private var systemSession: Session?
     private var drainScript: Script?
-    private var drainTimer: Task<Void, Never>?
-    private var systemDrainOwner: String?
+    private var systemDrainCapable: Bool?
+    private var systemDrainTasks: [String: Task<Void, Never>] = [:]
     private var pendingTraces: [String: PendingTrace] = [:]
     private var pendingEmits: [String: Task<Void, Never>] = [:]
-    private var inProcessDrainTasks: [String: Task<Void, Never>] = [:]
     private static let runningTraceEmitInterval: UInt64 = 250_000_000
-    private static let inProcessDrainInterval: UInt64 = 50_000_000
+    private static let systemDrainInterval: UInt64 = 50_000_000
 
     private let drainAgentSource: String?
     private let traceStore: TraceStore?
@@ -124,7 +123,6 @@ public final class ProcessNode: Identifiable {
         var prologueBytes: String?
         var accumulated: Data
         var lost: Int
-        var useSystemDrain: Bool
     }
 
     public init(
@@ -338,7 +336,8 @@ public final class ProcessNode: Identifiable {
                 return true
 
             case "itrace:start":
-                guard let sessionId = dict["sessionId"] as? String,
+                guard let token = dict["token"] as? Int,
+                    let sessionId = dict["sessionId"] as? String,
                     let bufferLocation = dict["bufferLocation"] as? String,
                     let originDict = dict["origin"] as? [String: Any],
                     let origin = parseTraceOrigin(originDict)
@@ -348,6 +347,7 @@ public final class ProcessNode: Identifiable {
                 let prologueBytes = dict["prologueBytes"] as? String
                 Task { @MainActor in
                     await self.handleITraceStart(
+                        token: token,
                         sessionId: sessionId,
                         origin: origin,
                         bufferLocation: bufferLocation,
@@ -1212,7 +1212,7 @@ public final class ProcessNode: Identifiable {
             systemSession = sysSession
             drainScript = script
         } catch {
-            // System session not available; fall back to in-process draining.
+            // System session not available; fall back to in-agent draining.
         }
     }
 
@@ -1220,24 +1220,8 @@ public final class ProcessNode: Identifiable {
         drainScript != nil
     }
 
-    public func startThreadTraceOnAgent(traceID: UUID, threadID: UInt, threadName: String?) async throws {
-        var args: [String: Any] = [
-            "sessionId": traceID.uuidString,
-            "threadId": Int(threadID),
-        ]
-        if let threadName {
-            args["threadName"] = threadName
-        }
-        try await script.exports.startThreadTrace(JSValue(args))
-    }
-
-    public func stopTraceOnAgent(traceID: UUID) async throws {
-        try await script.exports.stopThreadTrace(JSValue([
-            "sessionId": traceID.uuidString,
-        ]))
-    }
-
     func handleITraceStart(
+        token: Int,
         sessionId: String,
         origin: ITrace.Origin,
         bufferLocation: String,
@@ -1252,24 +1236,33 @@ public final class ProcessNode: Identifiable {
             hookTarget: hookTarget,
             prologueBytes: prologueBytes,
             accumulated: Data(),
-            lost: 0,
-            useSystemDrain: false
+            lost: 0
         )
         pendingTraces[sessionId] = pending
         emitTraceUpdate(sessionId: sessionId)
 
-        if let drainScript, systemDrainOwner == nil {
-            do {
-                try await drainScript.exports.openBuffer(bufferLocation)
-                pendingTraces[sessionId]?.useSystemDrain = true
-                systemDrainOwner = sessionId
-                startSystemDrainTimer(for: sessionId)
-                return
-            } catch {
-            }
+        let drain = await negotiateDrain(sessionId: sessionId, bufferLocation: bufferLocation)
+        script.post(["type": "itrace:ack:\(token)", "drain": drain])
+    }
+
+    // The agent is blocked awaiting this ack before it arms Stalker, so the
+    // out-of-process remap (which may crash the target) is established here,
+    // while the buffer is still intact. task_for_pid capability is fixed per
+    // target, so a single denial disqualifies system draining for good.
+    private func negotiateDrain(sessionId: String, bufferLocation: String) async -> String {
+        guard let drainScript, systemDrainCapable != false else {
+            return "in-agent"
         }
 
-        startInProcessDrain(sessionId: sessionId)
+        do {
+            try await drainScript.exports.openBuffer(sessionId, bufferLocation)
+            systemDrainCapable = true
+            startSystemDrainTimer(for: sessionId)
+            return "system"
+        } catch {
+            systemDrainCapable = false
+            return "in-agent"
+        }
     }
 
     func handleITraceChunk(sessionId: String, data: [UInt8], lost: Int) {
@@ -1279,18 +1272,17 @@ public final class ProcessNode: Identifiable {
     }
 
     func handleITraceStop(sessionId: String, lost: Int, data: [UInt8]?) async {
-        if systemDrainOwner == sessionId, let drainScript {
-            drainTimer?.cancel()
-            drainTimer = nil
+        if let task = systemDrainTasks.removeValue(forKey: sessionId), let drainScript {
+            task.cancel()
             do {
-                if let finalChunk = try await drainScript.exports.close() as? [UInt8], !finalChunk.isEmpty {
+                let sysLost = (try? await drainScript.exports.getLost(sessionId)) as? Int ?? 0
+                if let finalChunk = try await drainScript.exports.close(sessionId) as? [UInt8], !finalChunk.isEmpty {
                     pendingTraces[sessionId]?.accumulated.append(contentsOf: finalChunk)
                 }
-                let sysLost = (try? await drainScript.exports.getLost()) as? Int ?? 0
-                pendingTraces[sessionId]?.lost = sysLost
+                let mergedLost = max(pendingTraces[sessionId]?.lost ?? 0, sysLost)
+                pendingTraces[sessionId]?.lost = mergedLost
             } catch {
             }
-            systemDrainOwner = nil
         }
 
         if let data, !data.isEmpty {
@@ -1354,32 +1346,16 @@ public final class ProcessNode: Identifiable {
         )
     }
 
-    private func startInProcessDrain(sessionId: String) {
-        inProcessDrainTasks[sessionId]?.cancel()
-        inProcessDrainTasks[sessionId] = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.inProcessDrainInterval)
-                guard let self, !Task.isCancelled else { break }
-                if self.pendingTraces[sessionId] == nil { break }
-                _ = try? await self.script.exports.drainLocally(sessionId)
-            }
-        }
-    }
-
-    private func cancelInProcessDrain(sessionId: String) {
-        inProcessDrainTasks.removeValue(forKey: sessionId)?.cancel()
-    }
-
     private func startSystemDrainTimer(for sessionId: String) {
-        drainTimer?.cancel()
-        drainTimer = Task { @MainActor [weak self] in
+        systemDrainTasks[sessionId] = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 50_000_000)
+                try? await Task.sleep(nanoseconds: Self.systemDrainInterval)
 
                 guard let self, let drainScript = self.drainScript else { break }
+                if self.pendingTraces[sessionId] == nil { break }
 
                 do {
-                    if let chunk = try await drainScript.exports.drain() as? [UInt8], !chunk.isEmpty {
+                    if let chunk = try await drainScript.exports.drain(sessionId) as? [UInt8], !chunk.isEmpty {
                         self.pendingTraces[sessionId]?.accumulated.append(contentsOf: chunk)
                         self.scheduleRunningTraceEmit(sessionId: sessionId)
                     }
@@ -1392,9 +1368,8 @@ public final class ProcessNode: Identifiable {
 
     private func finalizeTrace(sessionId: String) async {
         cancelPendingEmit(sessionId: sessionId)
-        cancelInProcessDrain(sessionId: sessionId)
+        systemDrainTasks.removeValue(forKey: sessionId)?.cancel()
         guard let pending = pendingTraces.removeValue(forKey: sessionId) else { return }
-        if systemDrainOwner == sessionId { systemDrainOwner = nil }
 
         var (traceData, metadataJSON, panics) = decodeAccumulated(pending: pending)
         for panic in panics {
@@ -1474,32 +1449,31 @@ public final class ProcessNode: Identifiable {
     }
 
     private func finalizePendingTracesOnCrash() async {
+        // Allow any in-flight `itrace:start` IPC messages from the agent to
+        // be processed before we finalize, so we don't drop traces whose
+        // start arrived in the same event-loop tick as the detach.
+        try? await Task.sleep(nanoseconds: 250_000_000)
         let keys = Array(pendingTraces.keys)
         for key in keys {
-            if systemDrainOwner == key, let drainScript {
-                drainTimer?.cancel()
-                drainTimer = nil
+            if let task = systemDrainTasks.removeValue(forKey: key), let drainScript {
+                task.cancel()
                 do {
-                    if let finalChunk = try await drainScript.exports.close() as? [UInt8], !finalChunk.isEmpty {
+                    if let finalChunk = try await drainScript.exports.close(key) as? [UInt8], !finalChunk.isEmpty {
                         pendingTraces[key]?.accumulated.append(contentsOf: finalChunk)
                     }
                 } catch {
                 }
-                systemDrainOwner = nil
             }
             await finalizeTrace(sessionId: key)
         }
     }
 
     public func tearDownITrace() async {
-        drainTimer?.cancel()
-        drainTimer = nil
+        for task in systemDrainTasks.values { task.cancel() }
+        systemDrainTasks.removeAll()
         for task in pendingEmits.values { task.cancel() }
         pendingEmits.removeAll()
-        for task in inProcessDrainTasks.values { task.cancel() }
-        inProcessDrainTasks.removeAll()
         pendingTraces.removeAll()
-        systemDrainOwner = nil
 
         if let drainScript {
             try? await drainScript.unload()

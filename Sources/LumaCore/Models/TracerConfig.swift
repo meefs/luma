@@ -70,10 +70,36 @@ public struct TracerConfig: Codable, Equatable, Sendable {
         }
     }
 
+    public struct ThreadTrace: Codable, Equatable, Identifiable, Sendable {
+        public var id: UUID
+        public var threadID: UInt
+        public var threadName: String?
+
+        public init(id: UUID = UUID(), threadID: UInt, threadName: String? = nil) {
+            self.id = id
+            self.threadID = threadID
+            self.threadName = threadName
+        }
+    }
+
     public var hooks: [Hook]
 
-    public init(hooks: [Hook] = []) {
+    public var threadTraces: [ThreadTrace]
+
+    public init(hooks: [Hook] = [], threadTraces: [ThreadTrace] = []) {
         self.hooks = hooks
+        self.threadTraces = threadTraces
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case hooks
+        case threadTraces
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hooks = try container.decode([Hook].self, forKey: .hooks)
+        threadTraces = try container.decodeIfPresent([ThreadTrace].self, forKey: .threadTraces) ?? []
     }
 
     public func hooksByMostRecentlyEdited() -> [Hook] {

@@ -1574,6 +1574,9 @@ public final class Engine {
                 try? store.save(session)
             }
         }
+        #if canImport(Network) || canImport(CSoup)
+        purgeExternalMCPMissions()
+        #endif
         notebookEntries = (try? store.fetchNotebookEntries()) ?? []
         sessions = (try? store.fetchSessions()) ?? []
         for session in sessions {
@@ -3532,7 +3535,9 @@ public final class Engine {
     ) async -> ITrace? {
         guard let node = node(forSessionID: sessionID) else { return nil }
 
+        let threadTrace = TracerConfig.ThreadTrace(threadID: threadID, threadName: threadName)
         let trace = ITrace(
+            id: threadTrace.id,
             sessionID: sessionID,
             origin: .thread(threadID: threadID, threadName: threadName),
             displayName: threadName.map { "Thread trace: \($0)" } ?? "Thread trace: tid \(threadID)",
@@ -3541,17 +3546,7 @@ public final class Engine {
         try? store.save(trace)
         onSessionListChanged?(.traceUpdated(trace))
 
-        do {
-            try await node.startThreadTraceOnAgent(
-                traceID: trace.id,
-                threadID: threadID,
-                threadName: threadName
-            )
-        } catch {
-            try? store.deleteITrace(id: trace.id)
-            onSessionListChanged?(.traceRemoved(id: trace.id, sessionID: sessionID))
-            return nil
-        }
+        await addThreadTraceToTracer(sessionID: sessionID, threadTrace: threadTrace)
 
         if let sid = collabSessionID(forNode: node) {
             collaboration.enqueueUpsertTrace(sessionID: sid, trace: trace)
@@ -3560,9 +3555,30 @@ public final class Engine {
         return trace
     }
 
+    private func addThreadTraceToTracer(sessionID: UUID, threadTrace: TracerConfig.ThreadTrace) async {
+        if let existing = tracerInstance(forSessionID: sessionID) {
+            var config = (try? TracerConfig.decode(from: existing.configJSON)) ?? TracerConfig()
+            config.threadTraces.append(threadTrace)
+            await applyInstrumentConfig(existing, configJSON: config.encode())
+            return
+        }
+
+        var initialConfig = TracerConfig()
+        initialConfig.threadTraces.append(threadTrace)
+        _ = await addInstrument(
+            kind: .tracer,
+            sourceIdentifier: "builtin.tracer",
+            configJSON: initialConfig.encode(),
+            sessionID: sessionID
+        )
+    }
+
     public func stopThreadTrace(traceID: UUID, sessionID: UUID) async {
-        guard let node = node(forSessionID: sessionID) else { return }
-        try? await node.stopTraceOnAgent(traceID: traceID)
+        guard let existing = tracerInstance(forSessionID: sessionID) else { return }
+        var config = (try? TracerConfig.decode(from: existing.configJSON)) ?? TracerConfig()
+        guard config.threadTraces.contains(where: { $0.id == traceID }) else { return }
+        config.threadTraces.removeAll { $0.id == traceID }
+        await applyInstrumentConfig(existing, configJSON: config.encode())
     }
 
     public func decodeTrace(traceID: UUID, sessionID: UUID) async -> DecodedITrace? {
@@ -3736,7 +3752,15 @@ public final class Engine {
             hooksJSON.append(dict)
         }
 
-        return ["hooks": hooksJSON]
+        return ["hooks": hooksJSON, "threadTraces": config.threadTraces.map(threadTraceJSON)]
+    }
+
+    private func threadTraceJSON(_ trace: TracerConfig.ThreadTrace) -> JSONObject {
+        [
+            "id": trace.id.uuidString,
+            "threadId": Int(trace.threadID),
+            "threadName": trace.threadName ?? NSNull(),
+        ]
     }
 
     private func compileTracerHook(
@@ -5044,6 +5068,13 @@ public func deleteCustomInstrument(_ defID: UUID) async {
         activeMCPServersByMissionID.removeValue(forKey: missionID)
     }
 
+    func purgeExternalMCPMissions() {
+        guard let missions = try? store.fetchMissions() else { return }
+        for mission in missions where mission.providerID == externalMCPProviderID {
+            deleteMission(missionID: mission.id)
+        }
+    }
+
     public var isExternalMCPRunning: Bool { externalMCPServer != nil }
 
     public var externalMCPTrustsClient: Bool {
@@ -5063,10 +5094,12 @@ public func deleteCustomInstrument(_ defID: UUID) async {
         let token = try await loadOrMintExternalMCPToken()
         let preferredPort = await loadPreferredExternalMCPPort()
 
+        purgeExternalMCPMissions()
+
         var mission = Mission(
             goalText: "External tool calls (via MCP)",
-            providerID: "external",
-            modelID: "external",
+            providerID: externalMCPProviderID,
+            modelID: externalMCPProviderID,
             tokenBudgetInput: 0,
             tokenBudgetOutput: 0
         )
@@ -5128,6 +5161,8 @@ public func deleteCustomInstrument(_ defID: UUID) async {
     }
 
     #endif
+
+    private let externalMCPProviderID = "external"
 
     private static let externalMCPCredentialService = "luma.mcp.external"
     private static let externalMCPCredentialAccount = "default"
