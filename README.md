@@ -85,6 +85,7 @@ dependencies:
 sudo dnf install -y \
     gcc-c++ libstdc++-static patch golang-bin nodejs swift-lang \
     libadwaita-devel atk-devel webkitgtk6.0-devel \
+    libepoxy-devel librsvg2-devel \
     libgee-devel json-glib-devel libsoup3-devel \
     libunwind-devel libdwarf-devel libnice-devel \
     ngtcp2-crypto-ossl-devel libbpf-devel capstone-devel \
