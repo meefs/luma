@@ -24,11 +24,15 @@ final class CodeShareBrowser {
     private let listSpinner: Spinner
 
     private let detailContainer: Box
+    private let placeholderLabel: Label
     private let detailSpinner: Spinner
     private let titleLabel: Label
     private let ownerLabel: Label
     private let descriptionLabel: Label
+    private let sourceHeader: Label
+    private let sourceContainer: Box
     private let sourceEditor: MonacoEditor
+    private let actionsRow: Box
     private let addButton: Button
     private let detailErrorLabel: Label
 
@@ -112,6 +116,14 @@ final class CodeShareBrowser {
         detailContainer.hexpand = true
         detailContainer.vexpand = true
 
+        placeholderLabel = Label(str: "Select a snippet to preview and add it as an instrument.")
+        placeholderLabel.halign = .center
+        placeholderLabel.valign = .center
+        placeholderLabel.vexpand = true
+        placeholderLabel.wrap = true
+        placeholderLabel.add(cssClass: "dim-label")
+        detailContainer.append(child: placeholderLabel)
+
         let headerRow = Box(orientation: .horizontal, spacing: 8)
         titleLabel = Label(str: "")
         titleLabel.halign = .start
@@ -132,7 +144,7 @@ final class CodeShareBrowser {
         ownerLabel.selectable = true
         detailContainer.append(child: ownerLabel)
 
-        descriptionLabel = Label(str: "Select a snippet to preview and add it as an instrument.")
+        descriptionLabel = Label(str: "")
         descriptionLabel.halign = .start
         descriptionLabel.wrap = true
         descriptionLabel.selectable = true
@@ -145,34 +157,29 @@ final class CodeShareBrowser {
         detailErrorLabel.visible = false
         detailContainer.append(child: detailErrorLabel)
 
-        let sourceHeader = Label(str: "Source")
+        sourceHeader = Label(str: "Source")
         sourceHeader.halign = .start
         sourceHeader.add(cssClass: "heading")
         sourceHeader.marginTop = 8
         detailContainer.append(child: sourceHeader)
 
-        let sourceContainer = Box(orientation: .vertical, spacing: 0)
+        sourceContainer = Box(orientation: .vertical, spacing: 0)
         sourceContainer.hexpand = true
         sourceContainer.vexpand = true
-        sourceContainer.setSizeRequest(width: -1, height: 360)
         detailContainer.append(child: sourceContainer)
 
-        let actions = Box(orientation: .horizontal, spacing: 8)
+        actionsRow = Box(orientation: .horizontal, spacing: 8)
         let actionsSpacer = Label(str: "")
         actionsSpacer.hexpand = true
-        actions.append(child: actionsSpacer)
+        actionsRow.append(child: actionsSpacer)
 
         addButton = Button(label: "Add as Instrument")
         addButton.add(cssClass: "suggested-action")
         addButton.sensitive = false
-        actions.append(child: addButton)
-        detailContainer.append(child: actions)
+        actionsRow.append(child: addButton)
+        detailContainer.append(child: actionsRow)
 
-        let detailScroll = ScrolledWindow()
-        detailScroll.hexpand = true
-        detailScroll.vexpand = true
-        detailScroll.set(child: detailContainer)
-        paned.endChild = WidgetRef(detailScroll)
+        paned.endChild = WidgetRef(detailContainer)
 
         widget.append(child: paned)
 
@@ -202,6 +209,7 @@ final class CodeShareBrowser {
         codeShareEditor.setText("")
         codeShareEditor.installInto(sourceContainer)
 
+        showDetailState(.placeholder)
         loadPopular()
     }
 
@@ -328,11 +336,12 @@ final class CodeShareBrowser {
         currentSource = ""
         titleLabel.setText(str: "")
         ownerLabel.setText(str: "")
-        descriptionLabel.setText(str: "Select a snippet to preview and add it as an instrument.")
+        descriptionLabel.setText(str: "")
         sourceEditor.setText("")
         addButton.sensitive = false
         detailErrorLabel.visible = false
         detailSpinner.visible = false
+        showDetailState(.placeholder)
     }
 
     private func loadDetails(for project: CodeShareService.ProjectSummary) {
@@ -346,6 +355,7 @@ final class CodeShareBrowser {
         ownerLabel.setText(str: "@\(project.owner)/\(project.slug)  •  ♥ \(project.likes)")
         descriptionLabel.setText(str: project.description)
         sourceEditor.setText("")
+        showDetailState(.loading)
 
         detailSpinner.visible = true
 
@@ -366,6 +376,7 @@ final class CodeShareBrowser {
                 self.descriptionLabel.setText(str: details.description)
                 self.sourceEditor.setText(details.source)
                 self.addButton.sensitive = true
+                self.showDetailState(.loaded)
             } catch is CancellationError {
                 return
             } catch {
@@ -373,6 +384,24 @@ final class CodeShareBrowser {
                 self.detailErrorLabel.visible = true
             }
         }
+    }
+
+    private enum DetailState {
+        case placeholder
+        case loading
+        case loaded
+    }
+
+    private func showDetailState(_ state: DetailState) {
+        placeholderLabel.visible = state == .placeholder
+        let hasSelection = state != .placeholder
+        titleLabel.visible = hasSelection
+        ownerLabel.visible = hasSelection
+        descriptionLabel.visible = hasSelection
+        let hasSource = state == .loaded
+        sourceHeader.visible = hasSource
+        sourceContainer.visible = hasSource
+        actionsRow.visible = hasSource
     }
 
     private func addAsInstrument() {
