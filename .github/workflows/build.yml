@@ -1144,10 +1144,8 @@ jobs:
     needs: version
     env:
       LUMA_VERSION: ${{ needs.version.outputs.version }}
-    # core26 is still in latest/beta until Ubuntu 26.04 ships, and the
-    # snap inside snapcraft's LXD container fails to install it. Keep
-    # the job wired up but don't block the workflow on its failures —
-    # it should start passing again once core26 hits latest/stable.
+    # Kept non-blocking as a safety net while the core26 snap build
+    # settles on the hosted runners.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -1204,7 +1202,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-latest
+          - runner: windows-2022
             win_arch: x86_64
             msvc_arch: amd64
             swift_build_arch: amd64
