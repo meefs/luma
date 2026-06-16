@@ -893,9 +893,12 @@ struct TargetPickerView: View {
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(proc.name)
-                                    Text("PID \(proc.pid)")
+                                    Text(processSubtitle(for: proc))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .help(processSubtitle(for: proc))
                                 }
 
                                 Spacer()
@@ -944,12 +947,20 @@ struct TargetPickerView: View {
         }
     }
 
+    private func processSubtitle(for proc: ProcessDetails) -> String {
+        guard let argv = proc.argv, !argv.isEmpty else {
+            return "PID \(proc.pid)"
+        }
+        return "PID \(proc.pid) · \(argv.joined(separator: " "))"
+    }
+
     private var filteredProcesses: [ProcessDetails] {
         if processSearchText.isEmpty {
             return processes
         } else {
             return processes.filter {
                 $0.name.localizedCaseInsensitiveContains(processSearchText)
+                    || ($0.argv?.contains { $0.localizedCaseInsensitiveContains(processSearchText) } ?? false)
             }
         }
     }

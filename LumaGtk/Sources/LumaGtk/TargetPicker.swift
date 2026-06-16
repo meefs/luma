@@ -1193,6 +1193,7 @@ final class TargetPicker {
         } else {
             filteredProcesses = processes.filter {
                 $0.name.localizedCaseInsensitiveContains(trimmed)
+                    || ($0.argv?.contains { $0.localizedCaseInsensitiveContains(trimmed) } ?? false)
             }
         }
         processList.removeAll()
@@ -1217,18 +1218,28 @@ final class TargetPicker {
             let nameLabel = Label(str: proc.name)
             nameLabel.halign = .start
             nameLabel.ellipsize = EllipsizeMode.end
-            let pidLabel = Label(str: "PID \(proc.pid)")
-            pidLabel.halign = .start
-            pidLabel.add(cssClass: "dim-label")
-            pidLabel.add(cssClass: "caption")
+            let subtitle = processSubtitle(for: proc)
+            let subtitleLabel = Label(str: subtitle)
+            subtitleLabel.halign = .start
+            subtitleLabel.ellipsize = EllipsizeMode.middle
+            subtitleLabel.add(cssClass: "dim-label")
+            subtitleLabel.add(cssClass: "caption")
+            subtitleLabel.tooltipText = subtitle
             textBox.append(child: nameLabel)
-            textBox.append(child: pidLabel)
+            textBox.append(child: subtitleLabel)
             hbox.append(child: textBox)
             row.set(child: hbox)
             processList.append(child: row)
         }
         selectedProcessIndex = nil
         attachButton.sensitive = false
+    }
+
+    private func processSubtitle(for proc: ProcessDetails) -> String {
+        guard let argv = proc.argv, !argv.isEmpty else {
+            return "PID \(proc.pid)"
+        }
+        return "PID \(proc.pid) · \(argv.joined(separator: " "))"
     }
 
     private func handleProcessRow(_ row: ListBoxRowRef?) {
