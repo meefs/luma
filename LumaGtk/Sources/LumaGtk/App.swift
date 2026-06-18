@@ -96,7 +96,24 @@ final class LumaApplication {
             return
         }
 
+        if restorePreviousSession() {
+            return
+        }
+
         showWelcome()
+    }
+
+    private func restorePreviousSession() -> Bool {
+        let fm = FileManager.default
+        let remembered = LumaAppState.shared.openDocumentPaths
+        let surviving = remembered.filter { fm.fileExists(atPath: $0) }
+        if surviving != remembered {
+            LumaAppState.shared.setOpenDocumentPaths(surviving)
+        }
+        for path in surviving {
+            openWindow(forFile: URL(fileURLWithPath: path))
+        }
+        return !surviving.isEmpty
     }
 
     func showWelcome() {
@@ -192,6 +209,9 @@ final class LumaApplication {
             window.destroyWindow()
             return
         }
+        if !entry.document.isUntitled {
+            LumaAppState.shared.noteDocumentClosed(path: entry.document.url.path)
+        }
         app.hold()
         Task { @MainActor in
             await persistAndShutDown(entry, persist: persist)
@@ -225,11 +245,16 @@ final class LumaApplication {
         guard var entry = openDocuments[key] else { return }
         do {
             try Self.writeSnapshot(workingURL: entry.workingURL, to: destination)
+            let previous = entry.document
             let updated = LumaDocument(storage: .file(destination))
             entry.document = updated
             openDocuments[key] = entry
+            if !previous.isUntitled {
+                LumaAppState.shared.noteDocumentClosed(path: previous.url.path)
+            }
             LumaAppState.shared.lastDocumentPath = updated.url.path
             LumaAppState.shared.recordRecent(path: updated.url.path)
+            LumaAppState.shared.noteDocumentOpened(path: updated.url.path)
             rebuildPrimaryMenu()
             window.documentDidChange()
         } catch {
@@ -281,6 +306,7 @@ final class LumaApplication {
         LumaAppState.shared.lastDocumentPath = document.url.path
         if !document.isUntitled {
             LumaAppState.shared.recordRecent(path: document.url.path)
+            LumaAppState.shared.noteDocumentOpened(path: document.url.path)
             rebuildPrimaryMenu()
         }
     }

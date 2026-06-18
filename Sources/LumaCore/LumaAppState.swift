@@ -45,6 +45,7 @@ public final class LumaAppState {
         var untitledRelative: String?
         var externalAbsolute: String?
         var recentPaths: [String] = []
+        var openDocuments: [String] = []
         var providerBaseURLs: [String: String]?
         var missionDefaults: MissionDefaults?
         var externalMCPTrustsClient: Bool?
@@ -111,6 +112,28 @@ public final class LumaAppState {
         }
         guard list != stored.recentPaths else { return }
         stored.recentPaths = list
+        persist()
+    }
+
+    public var openDocumentPaths: [String] {
+        stored.openDocuments
+    }
+
+    public func noteDocumentOpened(path: String) {
+        guard !stored.openDocuments.contains(path) else { return }
+        stored.openDocuments.append(path)
+        persist()
+    }
+
+    public func noteDocumentClosed(path: String) {
+        guard let index = stored.openDocuments.firstIndex(of: path) else { return }
+        stored.openDocuments.remove(at: index)
+        persist()
+    }
+
+    public func setOpenDocumentPaths(_ paths: [String]) {
+        guard stored.openDocuments != paths else { return }
+        stored.openDocuments = paths
         persist()
     }
 
