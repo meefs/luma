@@ -18,7 +18,7 @@ final class ThreadDetailPane {
     private let entryLabel: Label
     private let refreshButton: Button
     private let actionsButton: MenuButton
-    private let registerList: Box
+    private let registerList: FlowBox
     private let messageLabel: Label
 
     private var loadTask: Task<Void, Never>?
@@ -66,8 +66,15 @@ final class ThreadDetailPane {
         entryLabel.add(cssClass: "monospace")
         entryLabel.visible = false
 
-        registerList = Box(orientation: .vertical, spacing: 2)
+        registerList = FlowBox()
+        registerList.selectionMode = .none
+        registerList.homogeneous = true
+        registerList.minChildrenPerLine = 1
+        registerList.maxChildrenPerLine = 8
+        registerList.columnSpacing = 16
+        registerList.rowSpacing = 2
         registerList.hexpand = true
+        registerList.valign = .start
 
         let scroll = ScrolledWindow()
         scroll.hexpand = true
@@ -211,11 +218,11 @@ final class ThreadDetailPane {
         }
     }
 
-    private func clear(_ box: Box) {
+    private func clear(_ box: FlowBox) {
         var child = box.firstChild
         while let current = child {
             child = current.nextSibling
-            box.remove(child: current)
+            box.remove(widget: current)
         }
     }
 }

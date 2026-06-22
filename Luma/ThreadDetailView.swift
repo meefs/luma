@@ -84,18 +84,12 @@ struct ThreadDetailView: View {
 
             ScrollView {
                 LazyVGrid(
-                    columns: [
-                        GridItem(.fixed(64), alignment: .trailing),
-                        GridItem(.flexible(), alignment: .leading),
-                    ],
+                    columns: [GridItem(.adaptive(minimum: 320), spacing: 16, alignment: .leading)],
                     alignment: .leading,
                     spacing: 4
                 ) {
                     ForEach(snap.registers) { reg in
-                        Text(reg.name)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        registerChip(reg)
+                        registerCell(reg)
                     }
                 }
                 .padding(.top, 4)
@@ -103,6 +97,18 @@ struct ThreadDetailView: View {
         } else {
             ProgressView().frame(maxWidth: .infinity)
         }
+    }
+
+    private func registerCell(_ reg: LumaCore.ThreadSnapshot.Register) -> some View {
+        HStack(spacing: 6) {
+            Text(reg.name)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+            registerChip(reg)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+        .font(.system(.body, design: .monospaced))
     }
 
     @ViewBuilder

@@ -147,8 +147,8 @@ final class SessionDetailView {
         threadsPane = Paned(orientation: .horizontal)
         threadsPane.startChild = WidgetRef(threadsScroll)
         threadsPane.endChild = WidgetRef(threadDetailContainer)
-        threadsPane.position = 320
-        threadsPane.resizeStartChild = true
+        threadsPane.position = 260
+        threadsPane.resizeStartChild = false
         threadsPane.resizeEndChild = true
         threadsPane.shrinkStartChild = false
         threadsPane.shrinkEndChild = false

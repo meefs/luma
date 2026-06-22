@@ -217,7 +217,7 @@ struct SessionDetailView: View {
         let threads = displayedThreads
         return PlatformHSplit {
             threadsTable(threads)
-                .frame(minWidth: 240, idealWidth: 320)
+                .frame(minWidth: 200, idealWidth: 240)
 
             if let thread = currentSelectedThread {
                 ThreadDetailView(
@@ -243,11 +243,13 @@ struct SessionDetailView: View {
             } else {
                 Table(threads, selection: selectedThreadID) {
                     TableColumn("ID") { t in Text(String(t.id)) }
+                        .width(min: 40, ideal: 50, max: 80)
                     TableColumn("Name") { t in Text(t.name ?? "—") }
                     TableColumn("Entrypoint") { t in
                         Text(t.entrypoint.map { String(format: "0x%llx", $0.routine) } ?? "—")
                             .font(.system(.body, design: .monospaced))
                     }
+                    .width(min: 100, ideal: 130)
                 }
                 .contextMenu(forSelectionType: ProcessThread.ID.self) { ids in
                     if let id = ids.first, let thread = threads.first(where: { $0.id == id }) {
