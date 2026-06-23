@@ -149,11 +149,13 @@ struct SessionDetailView: View {
             Text("Base")
                 .foregroundStyle(.secondary)
                 .gridColumnAlignment(.leading)
-            HStack(spacing: 6) {
-                Text(String(format: "0x%llx", address))
-                    .textSelection(.enabled)
-                openMemoryButton(address: address)
-            }
+            PointerValueText(
+                engine: engine,
+                sessionID: sessionID,
+                value: String(format: "0x%llx", address),
+                address: address,
+                selection: $selection
+            )
         }
     }
 
@@ -187,17 +189,17 @@ struct SessionDetailView: View {
                 Table(modules, selection: selectedModuleID) {
                     TableColumn("Name", value: \.name)
                     TableColumn("Base") { m in
-                        Text(String(format: "0x%llx", m.base))
-                            .font(.system(.body, design: .monospaced))
+                        PointerValueText(
+                            engine: engine,
+                            sessionID: sessionID,
+                            value: String(format: "0x%llx", m.base),
+                            address: m.base,
+                            selection: $selection
+                        )
                     }
                     TableColumn("Size") { m in
                         Text(String(format: "0x%llx", m.size))
                             .font(.system(.body, design: .monospaced))
-                    }
-                }
-                .contextMenu(forSelectionType: ProcessModule.ID.self) { ids in
-                    if let id = ids.first, let module = modules.first(where: { $0.id == id }) {
-                        openMemoryMenuItem(address: module.base)
                     }
                 }
             }
@@ -246,8 +248,18 @@ struct SessionDetailView: View {
                         .width(min: 40, ideal: 50, max: 80)
                     TableColumn("Name") { t in Text(t.name ?? "—") }
                     TableColumn("Entrypoint") { t in
-                        Text(t.entrypoint.map { String(format: "0x%llx", $0.routine) } ?? "—")
-                            .font(.system(.body, design: .monospaced))
+                        if let entry = t.entrypoint {
+                            PointerValueText(
+                                engine: engine,
+                                sessionID: sessionID,
+                                value: String(format: "0x%llx", entry.routine),
+                                address: entry.routine,
+                                context: AddressContext(kind: .function),
+                                selection: $selection
+                            )
+                        } else {
+                            Text("—")
+                        }
                     }
                     .width(min: 100, ideal: 130)
                 }
@@ -281,41 +293,6 @@ struct SessionDetailView: View {
                 } else {
                     Text(action.title)
                 }
-            }
-        }
-    }
-
-    private func openMemoryButton(address: UInt64) -> some View {
-        Button {
-            openMemoryInsight(at: address)
-        } label: {
-            Image(systemName: "doc.text.magnifyingglass")
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
-        .help("Open Memory")
-    }
-
-    @ViewBuilder
-    private func openMemoryMenuItem(address: UInt64) -> some View {
-        Button {
-            openMemoryInsight(at: address)
-        } label: {
-            Label("Open Memory", systemImage: "doc.text.magnifyingglass")
-        }
-    }
-
-    private func openMemoryInsight(at address: UInt64) {
-        Task { @MainActor in
-            do {
-                let insight = try engine.getOrCreateInsight(
-                    sessionID: sessionID,
-                    pointer: address,
-                    kind: .memory
-                )
-                selection = .insight(sessionID, insight.id)
-            } catch {
-                errorPresenter.present("Can’t open memory", error.localizedDescription)
             }
         }
     }

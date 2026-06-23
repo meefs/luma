@@ -1106,9 +1106,10 @@ final class EventStreamPane {
             line.halign = .start
             line.hexpand = true
             line.valign = .center
-            line.selectable = true
+            line.selectable = false
             row.append(child: line)
             lineLabels.append(line)
+            AddressActionMenu.attach(to: line, engine: engine, sessionID: sessionID, address: addr, value: String(format: "0x%llx", addr))
 
             let openButton = Button()
             openButton.set(child: Image(iconName: "go-next-symbolic"))

@@ -86,7 +86,13 @@ private struct TracerBacktraceView: View {
                                 .foregroundStyle(.secondary)
                             Text(displayString(idx: idx, address: addr))
                                 .font(.system(.footnote, design: .monospaced))
-                                .textSelection(.enabled)
+                                .pointerActions(
+                                    engine: engine,
+                                    sessionID: sessionID,
+                                    value: displayString(idx: idx, address: addr),
+                                    address: addr,
+                                    selection: $selection
+                                )
 
                             Spacer(minLength: 0)
 

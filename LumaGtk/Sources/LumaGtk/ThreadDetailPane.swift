@@ -190,7 +190,7 @@ final class ThreadDetailPane {
 
         let valueLabel = Label(str: reg.rawValue)
         valueLabel.add(cssClass: "monospace")
-        valueLabel.selectable = true
+        valueLabel.selectable = reg.pointerValue == nil
         valueLabel.halign = .start
         valueLabel.xalign = 0
         valueLabel.hexpand = true
@@ -204,6 +204,7 @@ final class ThreadDetailPane {
                 engine: engine,
                 sessionID: sessionID,
                 address: address,
+                value: reg.rawValue,
                 context: AddressContext(kind: registerKind(reg))
             )
         }

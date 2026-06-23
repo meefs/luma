@@ -495,45 +495,26 @@ private struct DisasmRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 110, alignment: .leading)
                 .contentShape(Rectangle())
-                .contextMenu {
-                    Button {
-                        Platform.copyToClipboard(String(format: "0x%llx", line.address))
-                    } label: {
-                        Label("Copy Address", systemImage: "doc.on.doc")
-                    }
-
+                .pointerActions(
+                    engine: engine,
+                    sessionID: sessionID,
+                    value: String(format: "0x%llx", line.address),
+                    address: line.address,
+                    context: AddressContext(kind: .code),
+                    selection: $selection
+                ) {
                     Divider()
-
                     Button {
                         openNotePopoverAddress = line.address
                     } label: {
                         Label("Notes & AI…", systemImage: "bubble.left.and.text.bubble.right")
                     }
-
                     Button {
                         Task { @MainActor in
                             await goToFunctionStart()
                         }
                     } label: {
                         Label("Go to Function Start", systemImage: "arrow.up.left.and.arrow.down.right")
-                    }
-
-                    Divider()
-
-                    ForEach(engine.addressActions(sessionID: sessionID, address: line.address)) { action in
-                        Button(role: action.role == .destructive ? .destructive : nil) {
-                            Task { @MainActor in
-                                if let target = await action.perform() {
-                                    selection = SidebarItemID(navigationTarget: target)
-                                }
-                            }
-                        } label: {
-                            if let systemImage = action.systemImage {
-                                Label(action.title, systemImage: systemImage)
-                            } else {
-                                Text(action.title)
-                            }
-                        }
                     }
                 }
                 .popover(

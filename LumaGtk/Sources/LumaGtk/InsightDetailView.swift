@@ -829,17 +829,7 @@ final class InsightDetailView {
     private func showAddressMenu(anchor: Widget, x: Double, y: Double, address: UInt64) {
         guard let engine else { return }
 
-        let primary: [ContextMenu.Item] = [
-            .init("Copy Address") {
-                let hex = String(format: "0x%llx", address)
-                guard let display = gdk_display_get_default() else { return }
-                let clipboard = gdk_display_get_clipboard(display)
-                hex.withCString { gdk_clipboard_set_text(clipboard, $0) }
-                InsightDetailView.copyFeedback?("Copied!")
-            }
-        ]
-
-        let navigation: [ContextMenu.Item] = [
+        let navigation: [[ContextMenu.Item]] = [[
             .init("Notes & AI…") { [weak self] in
                 self?.openNotePopover(anchoredAt: anchor, address: address)
             },
@@ -848,19 +838,11 @@ final class InsightDetailView {
                     await self?.goToFunctionStart(address: address)
                 }
             }
-        ]
+        ]]
 
-        var engineItems: [ContextMenu.Item] = []
-        for action in engine.addressActions(sessionID: sessionID, address: address) {
-            engineItems.append(ContextMenu.Item(action.title, destructive: action.role == .destructive) { [weak self] in
-                Task { @MainActor in
-                    guard let target = await action.perform() else { return }
-                    self?.owner?.navigate(to: target)
-                }
-            })
-        }
-
-        ContextMenu.present([primary, navigation, engineItems], at: widget, x: x, y: y)
+        AddressActionMenu.present(
+            at: widget, x: x, y: y, engine: engine, sessionID: sessionID, address: address,
+            value: String(format: "0x%llx", address), extraSections: navigation)
     }
 
     private func openNotePopover(anchoredAt anchor: Widget, address: UInt64) {

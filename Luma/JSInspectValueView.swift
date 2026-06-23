@@ -313,42 +313,13 @@ private struct JSInspectNodeView: View {
             {
                 Text(value.prettyAttributedDescription())
                     .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.disabled)
-                    .contextMenu {
-                        Button {
-                            Task { @MainActor in
-                                do {
-                                    let insight = try engine.getOrCreateInsight(
-                                        sessionID: sessionID,
-                                        pointer: addr,
-                                        kind: .memory
-                                    )
-                                    selection.wrappedValue = .insight(sessionID, insight.id)
-                                } catch {
-                                    errorPresenter.present("Can’t open memory", error.localizedDescription)
-                                }
-                            }
-                        } label: {
-                            Label("Open Memory", systemImage: "doc.text.magnifyingglass")
-                        }
-
-                        Button {
-                            Task { @MainActor in
-                                do {
-                                    let insight = try engine.getOrCreateInsight(
-                                        sessionID: sessionID,
-                                        pointer: addr,
-                                        kind: .disassembly
-                                    )
-                                    selection.wrappedValue = .insight(sessionID, insight.id)
-                                } catch {
-                                    errorPresenter.present("Can’t open disassembly", error.localizedDescription)
-                                }
-                            }
-                        } label: {
-                            Label("Open Disassembly", systemImage: "hammer")
-                        }
-                    }
+                    .pointerActions(
+                        engine: engine,
+                        sessionID: sessionID,
+                        value: String(format: "0x%llx", addr),
+                        address: addr,
+                        selection: selection
+                    )
             } else {
                 Text(value.prettyAttributedDescription())
                     .fixedSize(horizontal: false, vertical: true)

@@ -73,22 +73,10 @@ struct ModuleDetailView: View {
             TableColumn("Name", value: \.name)
             TableColumn("Type") { e in Text(e.kind.rawValue) }
             TableColumn("Address") { e in
-                addressCell(address: e.address)
+                addressCell(address: e.address, context: addressContext(for: e))
             }
         }
         .frame(minHeight: 240, idealHeight: 360)
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                addressMenu(
-                    address: row.address,
-                    context: addressContext(for: row)
-                )
-            }
-        } primaryAction: { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                openInsight(at: row.address, context: addressContext(for: row))
-            }
-        }
     }
 
     private func importsTable(_ rows: [LumaCore.ModuleSymbolBundle.Import]) -> some View {
@@ -98,34 +86,13 @@ struct ModuleDetailView: View {
             TableColumn("Type") { i in Text(i.kind?.rawValue ?? "—") }
             TableColumn("Address") { i in
                 if let addr = i.address {
-                    addressCell(address: addr)
+                    addressCell(address: addr, context: addressContext(for: i))
                 } else {
                     Text("—")
                 }
             }
         }
         .frame(minHeight: 240, idealHeight: 360)
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let id = ids.first,
-                let row = rows.first(where: { $0.id == id }),
-                let address = row.address
-            {
-                addressMenu(
-                    address: address,
-                    context: addressContext(for: row)
-                )
-            }
-        } primaryAction: { ids in
-            if let id = ids.first,
-                let row = rows.first(where: { $0.id == id }),
-                let address = row.address
-            {
-                openInsight(
-                    at: address,
-                    context: addressContext(for: row)
-                )
-            }
-        }
     }
 
     private func symbolsTable(_ rows: [LumaCore.ModuleSymbolBundle.Symbol]) -> some View {
@@ -138,91 +105,21 @@ struct ModuleDetailView: View {
                     .font(.system(.body, design: .monospaced))
             }
             TableColumn("Address") { s in
-                addressCell(address: s.address)
+                addressCell(address: s.address, context: addressContext(for: s))
             }
         }
         .frame(minHeight: 240, idealHeight: 360)
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                addressMenu(
-                    address: row.address,
-                    context: addressContext(for: row)
-                )
-            }
-        } primaryAction: { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                openInsight(at: row.address, context: addressContext(for: row))
-            }
-        }
     }
 
-    private func addressCell(address: UInt64) -> some View {
-        Text(String(format: "0x%llx", address))
-            .font(.system(.body, design: .monospaced))
-    }
-
-    @ViewBuilder
-    private func addressMenu(address: UInt64, context: AddressContext) -> some View {
-        Button {
-            openInsight(at: address, context: context, kindOverride: .disassembly)
-        } label: {
-            Label("Open Disassembly", systemImage: "hammer")
-        }
-
-        Button {
-            openInsight(at: address, context: context, kindOverride: .memory)
-        } label: {
-            Label("Open Memory", systemImage: "doc.text.magnifyingglass")
-        }
-
-        let actions = engine.addressActions(sessionID: sessionID, address: address, context: context)
-        if !actions.isEmpty {
-            Divider()
-            ForEach(actions) { action in
-                Button(role: action.role == .destructive ? .destructive : nil) {
-                    Task { @MainActor in
-                        if let target = await action.perform() {
-                            selection = SidebarItemID(navigationTarget: target)
-                        }
-                    }
-                } label: {
-                    if let icon = action.systemImage {
-                        Label(action.title, systemImage: icon)
-                    } else {
-                        Text(action.title)
-                    }
-                }
-            }
-        }
-    }
-
-    private func openInsight(
-        at address: UInt64,
-        context: AddressContext = AddressContext(),
-        kindOverride: LumaCore.AddressInsight.Kind? = nil
-    ) {
-        let kind: LumaCore.AddressInsight.Kind
-        if let kindOverride {
-            kind = kindOverride
-        } else if context.kind == .data {
-            kind = .memory
-        } else {
-            kind = .disassembly
-        }
-
-        Task { @MainActor in
-            do {
-                let insight = try engine.getOrCreateInsight(
-                    sessionID: sessionID,
-                    pointer: address,
-                    kind: kind,
-                    preferredAnchor: context.anchorHint
-                )
-                selection = .insight(sessionID, insight.id)
-            } catch {
-                loadErrors[module.id] = error.localizedDescription
-            }
-        }
+    private func addressCell(address: UInt64, context: AddressContext) -> some View {
+        PointerValueText(
+            engine: engine,
+            sessionID: sessionID,
+            value: String(format: "0x%llx", address),
+            address: address,
+            context: context,
+            selection: $selection
+        )
     }
 
     private func load(_ module: LumaCore.ProcessModule) async {

@@ -378,8 +378,11 @@ final class SessionDetailView {
 
         let val = Label(str: String(format: "0x%llx", address))
         val.halign = .start
-        val.selectable = true
+        val.selectable = false
         val.xalign = 0
+        if let engine {
+            AddressActionMenu.attach(to: val, engine: engine, sessionID: sessionID, address: address, value: String(format: "0x%llx", address))
+        }
 
         let openButton = makeOpenMemoryButton(address: address)
 
@@ -457,20 +460,10 @@ final class SessionDetailView {
     }
 
     private func attachModuleContextMenu(to anchor: Widget, module: LumaCore.ProcessModule) {
-        let address = module.base
-        let gesture = GestureClick()
-        gesture.set(button: 3)
-        gesture.propagationPhase = GTK_PHASE_CAPTURE
-        gesture.onPressed { [weak self, anchor] _, _, x, y in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let item = ContextMenu.Item("Open Memory") {
-                    self.openMemoryInsight(address: address)
-                }
-                ContextMenu.present([[item]], at: anchor, x: x, y: y)
-            }
-        }
-        anchor.install(controller: gesture)
+        guard let engine else { return }
+        AddressActionMenu.attach(
+            to: anchor, engine: engine, sessionID: sessionID, address: module.base,
+            value: String(format: "0x%llx", module.base))
     }
 
     private func attachThreadContextMenu(to anchor: Widget, thread: LumaCore.ProcessThread) {

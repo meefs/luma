@@ -356,12 +356,12 @@ final class JSInspectValueWidget {
         label.add(cssClass: "monospace")
         label.halign = .start
         label.wrap = true
-        if let address = value.nativePointerAddress {
+        if case .nativePointer(let pointerText) = value, let address = value.nativePointerAddress {
             label.selectable = false
             let wrapper = Box(orientation: .horizontal, spacing: 0)
             wrapper.halign = .start
             wrapper.append(child: label)
-            AddressActionMenu.attach(to: wrapper, engine: engine, sessionID: sessionID, address: address)
+            AddressActionMenu.attach(to: wrapper, engine: engine, sessionID: sessionID, address: address, value: pointerText)
             return wrapper
         }
         label.selectable = true

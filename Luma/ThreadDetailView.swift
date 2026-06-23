@@ -104,59 +104,30 @@ struct ThreadDetailView: View {
             Text(reg.name)
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
-            registerChip(reg)
-                .textSelection(.enabled)
+            registerValue(reg)
             Spacer(minLength: 0)
         }
         .font(.system(.body, design: .monospaced))
     }
 
     @ViewBuilder
-    private func registerChip(_ reg: LumaCore.ThreadSnapshot.Register) -> some View {
+    private func registerValue(_ reg: LumaCore.ThreadSnapshot.Register) -> some View {
         if let address = reg.pointerValue {
             Text(reg.rawValue)
-                .font(.system(.body, design: .monospaced))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
-                .contextMenu {
-                    Button {
-                        openInsight(at: address, kind: .memory)
-                    } label: {
-                        Label("Open Memory", systemImage: "doc.text.magnifyingglass")
-                    }
-                    Button {
-                        openInsight(at: address, kind: .disassembly)
-                    } label: {
-                        Label("Open Disassembly", systemImage: "hammer")
-                    }
-                    let actions = engine.addressActions(
-                        sessionID: sessionID,
-                        address: address,
-                        context: AddressContext(kind: registerKind(reg))
-                    )
-                    if !actions.isEmpty {
-                        Divider()
-                        ForEach(actions) { action in
-                            Button(role: action.role == .destructive ? .destructive : nil) {
-                                Task { @MainActor in
-                                    if let target = await action.perform() {
-                                        selection = SidebarItemID(navigationTarget: target)
-                                    }
-                                }
-                            } label: {
-                                if let icon = action.systemImage {
-                                    Label(action.title, systemImage: icon)
-                                } else {
-                                    Text(action.title)
-                                }
-                            }
-                        }
-                    }
-                }
+                .pointerActions(
+                    engine: engine,
+                    sessionID: sessionID,
+                    value: reg.rawValue,
+                    address: address,
+                    context: AddressContext(kind: registerKind(reg)),
+                    selection: $selection
+                )
         } else {
             Text(reg.rawValue)
-                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
         }
     }
 
@@ -166,21 +137,6 @@ struct ThreadDetailView: View {
             return .code
         }
         return .unspecified
-    }
-
-    private func openInsight(at address: UInt64, kind: LumaCore.AddressInsight.Kind) {
-        Task { @MainActor in
-            do {
-                let insight = try engine.getOrCreateInsight(
-                    sessionID: sessionID,
-                    pointer: address,
-                    kind: kind
-                )
-                selection = .insight(sessionID, insight.id)
-            } catch {
-                loadError = error.localizedDescription
-            }
-        }
     }
 
     private func reload() async {

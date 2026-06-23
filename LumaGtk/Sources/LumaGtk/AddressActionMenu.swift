@@ -15,6 +15,7 @@ enum AddressActionMenu {
         engine: Engine,
         sessionID: UUID,
         address: UInt64,
+        value: String,
         context: AddressContext = AddressContext()
     ) {
         let gesture = GestureClick()
@@ -22,7 +23,7 @@ enum AddressActionMenu {
         gesture.propagationPhase = GTK_PHASE_CAPTURE
         gesture.onPressed { [anchor] _, _, x, y in
             MainActor.assumeIsolated {
-                present(at: anchor, x: x, y: y, engine: engine, sessionID: sessionID, address: address, context: context)
+                present(at: anchor, x: x, y: y, engine: engine, sessionID: sessionID, address: address, value: value, context: context)
             }
         }
         anchor.install(controller: gesture)
@@ -35,19 +36,48 @@ enum AddressActionMenu {
         engine: Engine,
         sessionID: UUID,
         address: UInt64,
-        context: AddressContext = AddressContext()
+        value: String,
+        context: AddressContext = AddressContext(),
+        extraSections: [[ContextMenu.Item]] = []
     ) {
-        let inspectSection: [ContextMenu.Item] = [
-            .init("Open Disassembly") {
-                openInsight(engine: engine, sessionID: sessionID, address: address, kind: .disassembly, preferredAnchor: context.anchorHint, failureLabel: "Can\u{2019}t open disassembly")
-            },
-            .init("Open Memory") {
-                openInsight(engine: engine, sessionID: sessionID, address: address, kind: .memory, preferredAnchor: context.anchorHint, failureLabel: "Can\u{2019}t open memory")
-            },
+        Task { @MainActor in
+            let facts = await engine.addressFacts(sessionID: sessionID, address: address, context: context)
+            presentResolved(
+                at: anchor, x: x, y: y, engine: engine, sessionID: sessionID,
+                address: address, value: value, context: context, facts: facts, extraSections: extraSections)
+        }
+    }
+
+    private static func presentResolved(
+        at anchor: Widget,
+        x: Double,
+        y: Double,
+        engine: Engine,
+        sessionID: UUID,
+        address: UInt64,
+        value: String,
+        context: AddressContext,
+        facts: AddressFacts,
+        extraSections: [[ContextMenu.Item]]
+    ) {
+        let copySection: [ContextMenu.Item] = [
+            .init("Copy") { copyToClipboard(value) }
         ]
 
+        var inspectSection: [ContextMenu.Item] = []
+        if facts.mapping == .executable {
+            inspectSection.append(.init("Open Disassembly") {
+                openInsight(engine: engine, sessionID: sessionID, address: address, kind: .disassembly, preferredAnchor: context.anchorHint, failureLabel: "Can\u{2019}t open disassembly")
+            })
+        }
+        if facts.mapping != .unmapped {
+            inspectSection.append(.init("Open Memory") {
+                openInsight(engine: engine, sessionID: sessionID, address: address, kind: .memory, preferredAnchor: context.anchorHint, failureLabel: "Can\u{2019}t open memory")
+            })
+        }
+
         let pluggableSection: [ContextMenu.Item] = engine
-            .addressActions(sessionID: sessionID, address: address, context: context)
+            .addressActions(sessionID: sessionID, address: address, context: context, facts: facts)
             .map { action in
                 ContextMenu.Item(action.title, destructive: action.role == .destructive) {
                     Task { @MainActor in
@@ -57,7 +87,7 @@ enum AddressActionMenu {
                 }
             }
 
-        ContextMenu.present([inspectSection, pluggableSection], at: anchor, x: x, y: y)
+        ContextMenu.present([copySection, inspectSection] + extraSections + [pluggableSection], at: anchor, x: x, y: y)
     }
 
     static func openInsight(
@@ -74,5 +104,10 @@ enum AddressActionMenu {
         } catch {
             errorReporter?("\(failureLabel): \(error.localizedDescription)")
         }
+    }
+
+    private static func copyToClipboard(_ value: String) {
+        guard let display = Display.getDefault() else { return }
+        display.clipboard.set(text: value)
     }
 }
