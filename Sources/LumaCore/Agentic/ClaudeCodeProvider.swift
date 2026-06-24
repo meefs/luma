@@ -155,6 +155,7 @@ public final class ClaudeCodeProvider: LLMProvider {
         var assistantText = ""
         var assembledUsage = LLMUsage.zero
         var stopReason = LLMStopReason.endTurn
+        var errorDetail: String?
 
         for await chunk in pipeChunks(stdoutHandle) {
             try Task.checkCancellation()
@@ -171,15 +172,17 @@ public final class ClaudeCodeProvider: LLMProvider {
                     streamedText: &streamedText,
                     assistantText: &assistantText,
                     assembledUsage: &assembledUsage,
-                    stopReason: &stopReason
+                    stopReason: &stopReason,
+                    errorDetail: &errorDetail
                 )
             }
         }
 
         process.waitUntilExit()
         if process.terminationStatus != 0 {
-            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            let message = String(data: stderrData, encoding: .utf8) ?? "claude exited with status \(process.terminationStatus)"
+            let stderrText = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let detail = stderrText.isEmpty ? (errorDetail ?? "") : stderrText
+            let message = detail.isEmpty ? "claude exited with status \(process.terminationStatus)" : detail
             throw LLMProviderError.requestFailed(status: Int(process.terminationStatus), message: message)
         }
 
@@ -199,10 +202,20 @@ public final class ClaudeCodeProvider: LLMProvider {
         streamedText: inout String,
         assistantText: inout String,
         assembledUsage: inout LLMUsage,
-        stopReason: inout LLMStopReason
+        stopReason: inout LLMStopReason,
+        errorDetail: inout String?
     ) {
         let type = event["type"] as? String ?? ""
         switch type {
+        case "system":
+            if (event["subtype"] as? String) == "api_retry" {
+                let attempt = event["attempt"] as? Int ?? 0
+                let maxRetries = event["max_retries"] as? Int ?? 0
+                let reason = event["error"] as? String ?? "transient error"
+                errorDetail = "model \(reason) after \(maxRetries) retries"
+                continuation.yield(.textDelta("\n[model \(reason), retrying \(attempt)/\(maxRetries)…]\n"))
+            }
+
         case "stream_event":
             guard let payload = event["event"] as? [String: Any] else { return }
             if (payload["type"] as? String) == "content_block_delta",
@@ -236,7 +249,11 @@ public final class ClaudeCodeProvider: LLMProvider {
             switch event["subtype"] as? String {
             case "success": stopReason = .endTurn
             case "error_max_turns": stopReason = .maxTokens
-            case "error_during_execution", "error": stopReason = .error
+            case "error_during_execution", "error":
+                stopReason = .error
+                if let detail = event["result"] as? String, !detail.isEmpty {
+                    errorDetail = detail
+                }
             default: stopReason = .endTurn
             }
 
