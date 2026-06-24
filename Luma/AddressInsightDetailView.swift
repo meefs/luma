@@ -354,6 +354,28 @@ struct DisassemblyView: View {
                 jumpSelection(scrollProxy: scrollProxy)
                 return .handled
             }
+            .onKeyPress(.pageUp) {
+                if openNotePopoverAddress != nil { return .ignored }
+                moveSelection(-20, scrollProxy: scrollProxy)
+                return .handled
+            }
+            .onKeyPress(.pageDown) {
+                if openNotePopoverAddress != nil { return .ignored }
+                moveSelection(20, scrollProxy: scrollProxy)
+                return .handled
+            }
+            .onKeyPress(.home) {
+                if openNotePopoverAddress != nil { return .ignored }
+                selectEdge(first: true, scrollProxy: scrollProxy)
+                return .handled
+            }
+            .onKeyPress(.end) {
+                if openNotePopoverAddress != nil { return .ignored }
+                selectEdge(first: false, scrollProxy: scrollProxy)
+                return .handled
+            }
+            .onAppear { selectFirstIfNeeded() }
+            .onChange(of: lines.isEmpty) { _, _ in selectFirstIfNeeded() }
         }
     }
 
@@ -429,6 +451,23 @@ struct DisassemblyView: View {
 
         if next >= lines.count - 1 {
             onNeedMore()
+        }
+    }
+
+    private func selectEdge(first: Bool, scrollProxy: ScrollViewProxy) {
+        guard let addr = first ? lines.first?.address : lines.last?.address else { return }
+        selectedAddr = addr
+        withAnimation(.snappy) {
+            scrollProxy.scrollTo(addr, anchor: .center)
+        }
+        if !first {
+            onNeedMore()
+        }
+    }
+
+    private func selectFirstIfNeeded() {
+        if selectedAddr == nil, let first = lines.first?.address {
+            selectedAddr = first
         }
     }
 

@@ -547,6 +547,14 @@ final class InsightDetailView {
         if key == Gdk.keyPageDown {
             moveSelection(by: 10); return true
         }
+        if key == Gdk.keyHome {
+            selectRow(at: 0, focus: true); return true
+        }
+        if key == Gdk.keyEnd {
+            selectRow(at: disasmLines.count - 1, focus: true)
+            loadMore()
+            return true
+        }
         if key == Gdk.keyReturn {
             if let idx = selectedIndex {
                 jumpFromLine(at: idx)
