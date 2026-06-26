@@ -58,7 +58,7 @@ enum FridaTypeIndex {
     }
 
     private static func record(name: String, detail: String, into details: inout [String: String], ambiguous: inout Set<String>) {
-        guard !ambiguous.contains(name) else { return }
+        guard !detail.isEmpty, !ambiguous.contains(name) else { return }
         if let existing = details[name] {
             if existing != detail {
                 ambiguous.insert(name)
@@ -70,11 +70,11 @@ enum FridaTypeIndex {
     }
 
     private static func memberDeclaration(_ line: String) -> (name: String, detail: String)? {
-        guard line.hasSuffix(";") else { return nil }
-
         if let match = functionPattern.firstCapture(in: line) {
-            return (match.name, cleanSignature(match.rest))
+            let signature = match.rest.contains(")") ? cleanSignature(match.rest) : ""
+            return (match.name, signature)
         }
+        guard line.hasSuffix(";") else { return nil }
         if let match = memberPattern.firstCapture(in: line), !reservedNames.contains(match.name) {
             return (match.name, cleanSignature(match.rest))
         }
@@ -109,7 +109,7 @@ enum FridaTypeIndex {
         #"^(?:export\s+)?(?:declare\s+)?function\s+([A-Za-z_$][\w$]*)\s*(\(.*)$"#
     )
     private static let memberPattern = CapturePattern(
-        #"^(?:readonly\s+|static\s+|get\s+|set\s+|public\s+)?([A-Za-z_$][\w$]*)\??\s*([:(].*)$"#
+        #"^(?:export\s+|declare\s+|const\s+|let\s+|var\s+|readonly\s+|static\s+|get\s+|set\s+|public\s+)*([A-Za-z_$][\w$]*)\??\s*([:(].*)$"#
     )
 }
 
