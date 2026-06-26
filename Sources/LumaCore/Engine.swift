@@ -75,7 +75,6 @@ public final class Engine {
     public private(set) var addressAnnotations: [UUID: [UInt64: AddressAnnotation]] = [:]
     public private(set) var tracerInstanceIDBySession: [UUID: UUID] = [:]
     public private(set) var sessions: [ProcessSession] = []
-    public private(set) var driverBySession: [UUID: CollaborationSession.UserInfo] = [:]
     public private(set) var notebookEntries: [NotebookEntry] = []
     public private(set) var instrumentsBySession: [UUID: [InstrumentInstance]] = [:]
     public private(set) var insightsBySession: [UUID: [AddressInsight]] = [:]
@@ -1028,10 +1027,6 @@ public final class Engine {
             )
         }
 
-        collaboration.onSessionDriverChanged = { [weak self] sessionID, driver in
-            self?.applyRemoteSessionDriverChange(sessionID: sessionID, driver: driver)
-        }
-
         collaboration.onSessionReplCellAdded = { [weak self] sessionID, cell in
             self?.applyRemoteSessionReplCell(sessionID: sessionID, cell: cell)
         }
@@ -1271,15 +1266,6 @@ public final class Engine {
         return !isHostedRemotelyLive(session.id)
     }
 
-    private func becomeDriver(sessionID: UUID) {
-        guard collaboration.isCollaborative, let localUser = collaboration.localUser else { return }
-        driverBySession[sessionID] = localUser
-        collaboration.enqueueClaimDriver(sessionID: sessionID)
-        if let session = sessions.first(where: { $0.id == sessionID }) {
-            onSessionListChanged?(.sessionUpdated(session))
-        }
-    }
-
     private func emitEngineError(subsystem: String, text: String) {
         emitEngineEvent(subsystem: subsystem, level: .error, text: text)
     }
@@ -1432,8 +1418,6 @@ public final class Engine {
     }
 
     private func adoptRemoteSession(_ session: CollaborationSession.Session) {
-        driverBySession[session.id] = session.driver
-
         if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
             var record = sessions[idx]
             record.host = session.host
@@ -1550,15 +1534,6 @@ public final class Engine {
         saveSession(updated)
     }
 
-    private func applyRemoteSessionDriverChange(
-        sessionID: UUID,
-        driver: CollaborationSession.UserInfo
-    ) {
-        driverBySession[sessionID] = driver
-        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
-        onSessionListChanged?(.sessionUpdated(session))
-    }
-
     private func applyRemoteSessionHostChange(
         sessionID: UUID,
         host: CollaborationSession.UserInfo,
@@ -1601,7 +1576,6 @@ public final class Engine {
         }
         try? store.deleteSession(id: sessionID)
         sessions.removeAll { $0.id == sessionID }
-        driverBySession.removeValue(forKey: sessionID)
         onSessionListChanged?(.sessionRemoved(sessionID))
     }
 
@@ -2217,7 +2191,6 @@ public final class Engine {
             pid: node.pid,
             processName: node.processName
         )
-        becomeDriver(sessionID: sessionID)
     }
 
     public func resumeSpawnedProcess(node: ProcessNode) async {
@@ -2478,17 +2451,6 @@ public final class Engine {
 
     public var localUserID: String? {
         collaboration.localUser?.id ?? gitHubAuth.currentUser?.id
-    }
-
-    public func driver(forSessionID id: UUID) -> CollaborationSession.UserInfo? {
-        driverBySession[id]
-    }
-
-    public func localUserIsDriver(ofSessionID id: UUID) -> Bool {
-        guard let driver = driverBySession[id], let localID = collaboration.localUser?.id else {
-            return true
-        }
-        return driver.id == localID
     }
 
     public func disassembler(forSessionID sessionID: UUID) -> Disassembler? {
@@ -3052,7 +3014,13 @@ public final class Engine {
                     session: session
                 )
             }
-            await claimHostingAndAttach(session: &session, device: device, process: chosen, localUser: localUser)
+            let claimed = await claimHostingAndAttach(session: &session, device: device, process: chosen, localUser: localUser)
+            guard claimed else {
+                return .needsUserInput(
+                    reason: "Another owner is currently hosting this session. Try again once it's free.",
+                    session: session
+                )
+            }
             return .attached
         } catch {
             return .needsUserInput(
@@ -3072,12 +3040,29 @@ public final class Engine {
         await claimHostingAndAttach(session: &session, device: device, process: process, localUser: localUser)
     }
 
+    @discardableResult
     private func claimHostingAndAttach(
         session: inout ProcessSession,
         device: Device,
         process: ProcessDetails,
         localUser: CollaborationSession.UserInfo
-    ) async {
+    ) async -> Bool {
+        do {
+            try await collaboration.requestClaimHost(
+                sessionID: session.id,
+                deviceID: device.id,
+                deviceName: device.name,
+                pid: process.pid,
+                processName: process.name
+            )
+        } catch {
+            emitEngineError(
+                subsystem: "collaboration",
+                text: "Couldn't take over hosting \(session.processName): \(error.localizedDescription)"
+            )
+            return false
+        }
+
         if let existingNode = node(forSessionID: session.id) {
             removeNode(existingNode)
         }
@@ -3092,16 +3077,8 @@ public final class Engine {
         session.phase = .attaching
         saveSession(session)
 
-        collaboration.enqueueClaimHost(
-            sessionID: session.id,
-            deviceID: device.id,
-            deviceName: device.name,
-            pid: process.pid,
-            processName: process.name
-        )
-        becomeDriver(sessionID: session.id)
-
         _ = try? await attach(device: device, process: process, session: session)
+        return true
     }
 
     public func reestablishSession(id sessionID: UUID) async -> ReestablishResult {

@@ -64,8 +64,8 @@ final class REPLPane {
         guard let engine else { return }
         let session = engine.sessions.first(where: { $0.id == sessionID })
         let isLive = isLive(session: session, engine: engine)
-        let localIsDriver = engine.localUserIsDriver(ofSessionID: sessionID)
-        let canType = isLive && (localIsDriver || engine.collaboration.isOwner)
+        let canInteract = !engine.collaboration.isCollaborative || engine.collaboration.isOwner
+        let canType = isLive && canInteract
 
         let placeholder: String
         if isLive {

@@ -24,13 +24,12 @@ struct REPLView: View {
         engine.node(forSessionID: sessionID)
     }
 
-    private var localUserIsDriver: Bool {
-        engine.localUserIsDriver(ofSessionID: sessionID)
+    private var canSubmit: Bool {
+        canInteract && hasLiveTarget
     }
 
-    private var canSubmit: Bool {
-        guard localUserIsDriver || engine.collaboration.isOwner else { return false }
-        return hasLiveTarget
+    private var canInteract: Bool {
+        !engine.collaboration.isCollaborative || engine.collaboration.isOwner
     }
 
     private var hasLiveTarget: Bool {
@@ -40,10 +39,6 @@ struct REPLView: View {
               host.id != engine.localUserID
         else { return false }
         return session.phase == .attached || session.phase == .attaching
-    }
-
-    private var driver: LumaCore.CollaborationSession.UserInfo? {
-        engine.driver(forSessionID: sessionID)
     }
 
     private var orderedCells: [LumaCore.REPLCell] {
@@ -179,27 +174,6 @@ struct REPLView: View {
                     .frame(minHeight: 22)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("repl.input")
-                } else if let driver, !localUserIsDriver {
-                    ZStack(alignment: .leading) {
-                        REPLInputField(
-                            text: .constant(""),
-                            isFocused: .constant(false),
-                            onCommit: { _ in },
-                            onHistoryUp: {},
-                            onHistoryDown: {},
-                            requestCompletions: { _, _ in [] as [String] }
-                        )
-                        .disabled(true)
-                        .opacity(0.35)
-                        .frame(minHeight: 22)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Text("Driving: @\(driver.id)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 4)
-                    }
-                    .help("@\(driver.id) is currently driving this session.")
                 } else {
                     ZStack(alignment: .leading) {
                         REPLInputField(

@@ -15,7 +15,6 @@ public enum SessionOp: Sendable {
     case updateModuleSymbols(UpdateModuleSymbols)
     case updateThreads(UpdateThreads)
     case claimHost(ClaimHost)
-    case claimDriver(ClaimDriver)
     case addReplCell(AddReplCell)
     case addInstrument(AddInstrument)
     case updateInstrument(UpdateInstrument)
@@ -39,7 +38,6 @@ public enum SessionOp: Sendable {
         case .updateModuleSymbols(let u): return u.opID
         case .updateThreads(let u): return u.opID
         case .claimHost(let c): return c.opID
-        case .claimDriver(let c): return c.opID
         case .addReplCell(let a): return a.opID
         case .addInstrument(let a): return a.opID
         case .updateInstrument(let u): return u.opID
@@ -65,7 +63,6 @@ public enum SessionOp: Sendable {
         case .updateModuleSymbols(let u): return u.sessionID
         case .updateThreads(let u): return u.sessionID
         case .claimHost(let c): return c.sessionID
-        case .claimDriver(let c): return c.sessionID
         case .addReplCell(let a): return a.sessionID
         case .addInstrument(let a): return a.sessionID
         case .updateInstrument(let u): return u.sessionID
@@ -91,7 +88,6 @@ public enum SessionOp: Sendable {
         case .updateModuleSymbols: return "update-module-symbols"
         case .updateThreads: return "update-threads"
         case .claimHost: return "claim-host"
-        case .claimDriver: return "claim-driver"
         case .addReplCell: return "add-repl-cell"
         case .addInstrument: return "add-instrument"
         case .updateInstrument: return "update-instrument"
@@ -280,22 +276,6 @@ public enum SessionOp: Sendable {
             self.deviceName = deviceName
             self.pid = pid
             self.processName = processName
-        }
-    }
-
-    public struct ClaimDriver: Sendable {
-        public let opID: UUID
-        public let sessionID: UUID
-        public let driver: CollaborationSession.UserInfo
-
-        public init(
-            opID: UUID = UUID(),
-            sessionID: UUID,
-            driver: CollaborationSession.UserInfo
-        ) {
-            self.opID = opID
-            self.sessionID = sessionID
-            self.driver = driver
         }
     }
 
@@ -502,12 +482,6 @@ public enum SessionOp: Sendable {
             ]
             obj["device"] = ["id": c.deviceID, "name": c.deviceName]
             obj["process"] = ["pid": c.pid, "name": c.processName]
-        case .claimDriver(let c):
-            obj["driver"] = [
-                "id": c.driver.id,
-                "name": c.driver.name,
-                "avatar": c.driver.avatarURL?.absoluteString ?? "",
-            ]
         case .addReplCell(let a):
             if let cellObj = a.cell.toWireJSON() {
                 obj["cell"] = cellObj
@@ -701,16 +675,6 @@ public enum SessionOp: Sendable {
                 deviceName: deviceName,
                 pid: pid,
                 processName: processName
-            ))
-
-        case "claim-driver":
-            guard let driverObj = obj["driver"] as? [String: Any],
-                let driver = CollaborationSession.UserInfo.fromJSON(driverObj)
-            else { return nil }
-            return .claimDriver(ClaimDriver(
-                opID: opID,
-                sessionID: sessionID,
-                driver: driver
             ))
 
         case "add-repl-cell":

@@ -75,7 +75,6 @@ public final class CollaborationSession {
         public let processName: String
         public var phase: Phase
         public var armingState: ProcessSession.ArmingState
-        public var driver: UserInfo
         public let createdAt: String
         public var lastSeenAt: String
         public var modules: [ProcessModule]
@@ -97,7 +96,6 @@ public final class CollaborationSession {
             processName: String,
             phase: Phase,
             armingState: ProcessSession.ArmingState = .unarmed,
-            driver: UserInfo,
             createdAt: String,
             lastSeenAt: String,
             modules: [ProcessModule],
@@ -118,7 +116,6 @@ public final class CollaborationSession {
             self.processName = processName
             self.phase = phase
             self.armingState = armingState
-            self.driver = driver
             self.createdAt = createdAt
             self.lastSeenAt = lastSeenAt
             self.modules = modules
@@ -153,14 +150,6 @@ public final class CollaborationSession {
             else if let v = processObj["pid"] as? UInt { pid = v }
             else if let v = processObj["pid"] as? NSNumber { pid = v.uintValue }
             else { return nil }
-
-            let driver: UserInfo
-            if let driverObj = obj["driver"] as? [String: Any],
-               let parsed = UserInfo.fromJSON(driverObj) {
-                driver = parsed
-            } else {
-                driver = host
-            }
 
             let moduleObjs = (obj["modules"] as? [[String: Any]]) ?? []
             let modules = moduleObjs.compactMap(ProcessModule.fromJSON)
@@ -226,7 +215,6 @@ public final class CollaborationSession {
                 processName: processName,
                 phase: phase,
                 armingState: armingState,
-                driver: driver,
                 createdAt: createdAt,
                 lastSeenAt: lastSeenAt,
                 modules: modules,
@@ -337,7 +325,6 @@ public final class CollaborationSession {
     public var onSessionModulesUpdated: ((UUID, ModuleDelta) -> Void)?
     public var onSessionThreadsUpdated: ((UUID, ThreadDelta) -> Void)?
     public var onSessionHostChanged: ((UUID, UserInfo, String, String, UInt, String) -> Void)?
-    public var onSessionDriverChanged: ((UUID, UserInfo) -> Void)?
     public var onSessionReplCellAdded: ((UUID, REPLCell) -> Void)?
     public var onSessionReplEvalRequested: ((UUID, String, UUID) -> Void)?
     public var onSessionInstrumentAdded: ((UUID, InstrumentInstance) -> Void)?
@@ -976,27 +963,38 @@ public final class CollaborationSession {
         enqueueSessionOp(.remove(.init(sessionID: sessionID)))
     }
 
-    public func enqueueClaimHost(
+    public func requestClaimHost(
         sessionID: UUID,
         deviceID: String,
         deviceName: String,
         pid: UInt,
         processName: String
-    ) {
-        guard let localUser else { return }
-        enqueueSessionOp(.claimHost(.init(
+    ) async throws {
+        guard case .joined(let labID) = status, let localUser else {
+            throw AuthFailure(domain: "client", code: "not-joined", message: "Not in a lab")
+        }
+        let op = SessionOp.claimHost(.init(
             sessionID: sessionID,
             host: localUser,
             deviceID: deviceID,
             deviceName: deviceName,
             pid: pid,
             processName: processName
-        )))
-    }
-
-    public func enqueueClaimDriver(sessionID: UUID) {
-        guard let localUser else { return }
-        enqueueSessionOp(.claimDriver(.init(sessionID: sessionID, driver: localUser)))
+        ))
+        try await withCheckedThrowingContinuation { cont in
+            sendRequest(
+                to: "/labs/\(labID)/sessions/\(sessionID.uuidString)",
+                type: ".claim-host",
+                payload: op.toJSON()
+            ) { result in
+                switch result {
+                case .success:
+                    cont.resume(returning: ())
+                case .failure(let err):
+                    cont.resume(throwing: err)
+                }
+            }
+        }
     }
 
     public func enqueueAddReplCell(sessionID: UUID, cell: REPLCell) {
@@ -1313,7 +1311,6 @@ public final class CollaborationSession {
                 pid: a.pid,
                 processName: a.processName,
                 phase: .attaching,
-                driver: a.host,
                 createdAt: a.createdAt,
                 lastSeenAt: a.createdAt,
                 modules: []
@@ -1345,9 +1342,6 @@ public final class CollaborationSession {
             onSessionHostChanged?(
                 c.sessionID, c.host, c.deviceID, c.deviceName, c.pid, c.processName
             )
-
-        case .claimDriver(let c):
-            onSessionDriverChanged?(c.sessionID, c.driver)
 
         case .addReplCell(let a):
             cancelPendingReplTimeout(cellID: a.cell.id)
