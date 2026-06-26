@@ -879,9 +879,12 @@ public final class ProcessNode: Identifiable {
     }
 
     private func modeCommandCompletions(typed: String) -> [REPLCompletion] {
-        [("js", "JavaScript"), ("r2", "radare2")]
-            .filter { $0.0.hasPrefix(typed) }
-            .map { REPLCompletion(insertText: $0.0, displayText: ":\($0.0)", detailText: $0.1) }
+        [
+            ("js", "Evaluate JavaScript in the target process"),
+            ("r2", "Disassemble and analyze with radare2"),
+        ]
+        .filter { $0.0.hasPrefix(typed) }
+        .map { REPLCompletion(insertText: $0.0, displayText: ":\($0.0)", detailText: $0.1) }
     }
 
     private func annotatedCompletion(_ name: String) -> REPLCompletion {
