@@ -162,6 +162,17 @@ private func fetchFunctionEnd(hex: String) async -> UInt64? {
         }
     }
 
+    public func currentSeek() async -> UInt64? {
+        await ensureOpened()
+        let raw = (await r2.cmd("?v $$").output ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return parseHex(raw)
+    }
+
+    public func seek(to address: UInt64) async {
+        await ensureOpened()
+        await r2.cmd("s 0x\(String(address, radix: 16))")
+    }
+
     public func applyInsightName(at address: UInt64, title: String) async {
         await ensureOpened()
         if let module = moduleContaining(address: address) {

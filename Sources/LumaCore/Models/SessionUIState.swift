@@ -17,6 +17,7 @@ public struct SessionUIState: Codable, Equatable, Identifiable, Sendable, Fetcha
     public var ambientMissionID: UUID?
     public var replLanguage: REPLLanguage
     public var replDraft: String?
+    public var replSeekAnchor: AddressAnchor?
 
     public var id: UUID { sessionID }
 
@@ -29,6 +30,7 @@ public struct SessionUIState: Codable, Equatable, Identifiable, Sendable, Fetcha
         case ambientMissionID = "ambient_mission_id"
         case replLanguage = "repl_language"
         case replDraft = "repl_draft"
+        case replSeekAnchor = "repl_seek_anchor"
     }
 
     public init(
@@ -39,7 +41,8 @@ public struct SessionUIState: Codable, Equatable, Identifiable, Sendable, Fetcha
         lastSelectedThreadID: UInt? = nil,
         ambientMissionID: UUID? = nil,
         replLanguage: REPLLanguage = .javascript,
-        replDraft: String? = nil
+        replDraft: String? = nil,
+        replSeekAnchor: AddressAnchor? = nil
     ) {
         self.sessionID = sessionID
         self.sidebarExpansion = sidebarExpansion
@@ -49,5 +52,6 @@ public struct SessionUIState: Codable, Equatable, Identifiable, Sendable, Fetcha
         self.ambientMissionID = ambientMissionID
         self.replLanguage = replLanguage
         self.replDraft = replDraft
+        self.replSeekAnchor = replSeekAnchor
     }
 }

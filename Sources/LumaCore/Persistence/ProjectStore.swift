@@ -1483,6 +1483,7 @@ public final class ProjectStore: Sendable {
             t.column("ambient_mission_id", .text)
             t.column("repl_language", .text).notNull().defaults(to: REPLLanguage.javascript.rawValue)
             t.column("repl_draft", .text)
+            t.column("repl_seek_anchor", .text)
         }
 
         try db.create(table: "address_insight", ifNotExists: true) { t in

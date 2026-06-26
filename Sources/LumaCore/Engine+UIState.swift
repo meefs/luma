@@ -73,6 +73,10 @@ extension Engine {
         mutateSessionUIState(sessionID: sessionID) { $0.replDraft = draft }
     }
 
+    public func setREPLSeekAnchor(sessionID: UUID, _ anchor: AddressAnchor?) {
+        mutateSessionUIState(sessionID: sessionID) { $0.replSeekAnchor = anchor }
+    }
+
     private func mutateSessionUIState(sessionID: UUID, _ mutate: (inout SessionUIState) -> Void) {
         var state = sessionUIStates[sessionID] ?? SessionUIState(sessionID: sessionID)
         mutate(&state)
@@ -111,5 +115,9 @@ extension Engine {
 
     public func replDraft(forSessionID sessionID: UUID) -> String? {
         sessionUIStates[sessionID]?.replDraft
+    }
+
+    public func replSeekAnchor(forSessionID sessionID: UUID) -> AddressAnchor? {
+        sessionUIStates[sessionID]?.replSeekAnchor
     }
 }

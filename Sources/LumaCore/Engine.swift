@@ -2487,7 +2487,13 @@ public final class Engine {
             return .text("r2 is unavailable until the process is attached.")
         }
         let result = await disassembler.runCommand(command)
+        await captureREPLSeek(disassembler: disassembler, sessionID: sessionID)
         return replValue(forR2Result: result)
+    }
+
+    private func captureREPLSeek(disassembler: Disassembler, sessionID: UUID) async {
+        guard let address = await disassembler.currentSeek() else { return }
+        setREPLSeekAnchor(sessionID: sessionID, anchor(sessionID: sessionID, address: address))
     }
 
     private static let maxRadare2Completions = 64
@@ -2618,17 +2624,20 @@ public final class Engine {
         return output.isEmpty ? messages : output + "\n" + messages
     }
 
-    private func prewarmPersistedAnalysis(sessionID: UUID) {
+    private func prewarmSession(sessionID: UUID) {
         guard prewarmedSessions.insert(sessionID).inserted else { return }
+        guard let disassembler = disassembler(forSessionID: sessionID) else { return }
 
         let analyzedPaths = Set((try? store.fetchAnalyzedModulePaths(sessionID: sessionID)) ?? [])
-        guard !analyzedPaths.isEmpty else { return }
-
         let modules = modulesSnapshot(forSessionID: sessionID).filter { analyzedPaths.contains($0.path) }
-        guard !modules.isEmpty, let disassembler = disassembler(forSessionID: sessionID) else { return }
+        let seekAnchor = replSeekAnchor(forSessionID: sessionID)
+        guard !modules.isEmpty || seekAnchor != nil else { return }
 
         Task(priority: .utility) { @MainActor in
             await disassembler.warmUp(modules: modules)
+            if let seekAnchor, let address = await self.resolve(sessionID: sessionID, anchor: seekAnchor) {
+                await disassembler.seek(to: address)
+            }
         }
     }
 
@@ -5217,7 +5226,7 @@ public func deleteCustomInstrument(_ defID: UUID) async {
                     session.lastKnownModules = delta.applied(to: session.lastKnownModules)
                 }
                 self?.rebuildAddressAnnotations(sessionID: sessionID)
-                self?.prewarmPersistedAnalysis(sessionID: sessionID)
+                self?.prewarmSession(sessionID: sessionID)
                 if let sid = self?.collabSessionID(forNode: node) {
                     self?.collaboration.enqueueUpdateSessionModules(sessionID: sid, delta: delta)
                 }
