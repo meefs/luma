@@ -3,13 +3,6 @@ import SwiftUI
 import LumaCore
 
 extension LumaCore.REPLLanguage {
-    var promptLabel: String {
-        switch self {
-        case .javascript: return "js"
-        case .r2: return "r2"
-        }
-    }
-
     var promptGlyph: String {
         switch self {
         case .javascript: return "\u{203A}"
@@ -21,6 +14,13 @@ extension LumaCore.REPLLanguage {
         switch self {
         case .javascript: return .orange
         case .r2: return .blue
+        }
+    }
+
+    var inputPlaceholder: String {
+        switch self {
+        case .javascript: return "Enter JavaScript\u{2026}"
+        case .r2: return "Enter an r2 command\u{2026}"
         }
     }
 }
@@ -178,7 +178,7 @@ struct REPLView: View {
                 Button {
                     toggleMode()
                 } label: {
-                    Text("\(mode.promptLabel) \(mode.promptGlyph)")
+                    Text(mode.promptGlyph)
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(mode.promptColor)
                 }
@@ -202,7 +202,8 @@ struct REPLView: View {
                             guard let node = engine.node(forSessionID: sessionID) else { return [] as [LumaCore.REPLCompletion] }
                             return await node.completeInREPL(code: code, cursor: cursor, language: mode)
                         },
-                        language: mode
+                        language: mode,
+                        placeholder: mode.inputPlaceholder
                     )
                     .frame(minHeight: 22)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -216,7 +217,8 @@ struct REPLView: View {
                             onHistoryUp: {},
                             onHistoryDown: {},
                             requestCompletions: { _, _ in [] as [LumaCore.REPLCompletion] },
-                            language: .javascript
+                            language: .javascript,
+                            placeholder: ""
                         )
                         .disabled(true)
                         .opacity(0.35)
@@ -493,11 +495,13 @@ private struct REPLCellView: View {
                     Text(cell.language.promptGlyph)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(cell.language.promptColor)
-                    Text(DisplayTruncation.truncated(cell.code))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-
-                    Spacer(minLength: 8)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(cell.code)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
 
                     Text(cell.timestamp.formatted(date: .omitted, time: .shortened))
                         .font(.caption2)
@@ -506,18 +510,16 @@ private struct REPLCellView: View {
                 }
 
                 if !isResultEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .top, spacing: 6) {
                         Text("←")
                             .foregroundStyle(.secondary)
 
                         switch cell.result {
                         case .text(let s):
-                            Text(DisplayTruncation.truncated(s))
-                                .textSelection(.enabled)
+                            REPLResultText(styled: LumaCore.StyledText(s))
 
                         case .styled(let s):
-                            Text(DisplayTruncation.truncated(s).attributed)
-                                .textSelection(.enabled)
+                            REPLResultText(styled: s)
 
                         case .js(let v):
                             JSInspectValueView(
@@ -590,6 +592,33 @@ private struct REPLCellView: View {
     }
 }
 
+private struct REPLResultText: View {
+    let styled: LumaCore.StyledText
+
+    private static let chunk = 4096
+    @State private var revealed = REPLResultText.chunk
+
+    var body: some View {
+        let total = styled.plainText.count
+        let shown = min(revealed, total)
+        VStack(alignment: .leading, spacing: 2) {
+            ScrollView(.horizontal, showsIndicators: true) {
+                Text(styled.slice(charRange: 0..<shown).attributed)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+            }
+            if shown < total {
+                HStack(spacing: 12) {
+                    Button("Show more") { revealed = min(revealed + Self.chunk, total) }
+                    Button("Show all") { revealed = total }
+                }
+                .font(.caption2)
+                .buttonStyle(.link)
+            }
+        }
+    }
+}
+
 private struct REPLInputField: View {
     @Binding var text: String
     @Binding var isFocused: Bool
@@ -603,6 +632,7 @@ private struct REPLInputField: View {
     let onHistoryDown: () -> Void
     let requestCompletions: (String, Int) async -> [LumaCore.REPLCompletion]
     let language: LumaCore.REPLLanguage
+    let placeholder: String
 
     var body: some View {
         #if canImport(AppKit)
@@ -613,10 +643,11 @@ private struct REPLInputField: View {
                 onHistoryUp: onHistoryUp,
                 onHistoryDown: onHistoryDown,
                 requestCompletions: requestCompletions,
-                language: language
+                language: language,
+                placeholder: placeholder
             )
         #else
-            TextField("", text: $text, axis: .horizontal)
+            TextField(placeholder, text: $text, axis: .horizontal)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
                 .focused($focused)
@@ -643,6 +674,7 @@ private struct REPLInputField: View {
 
         let requestCompletions: (String, Int) async -> [LumaCore.REPLCompletion]
         let language: LumaCore.REPLLanguage
+        let placeholder: String
 
         func makeCoordinator() -> Coordinator {
             Coordinator(self)
@@ -665,6 +697,7 @@ private struct REPLInputField: View {
             field.isAutomaticTextCompletionEnabled = true
             field.suggestionsDelegate = context.coordinator
 
+            field.placeholderString = placeholder
             field.stringValue = text
 
             context.coordinator.textField = field
@@ -673,6 +706,10 @@ private struct REPLInputField: View {
 
         func updateNSView(_ nsView: NSTextField, context: Context) {
             context.coordinator.parent = self
+
+            if nsView.placeholderString != placeholder {
+                nsView.placeholderString = placeholder
+            }
 
             if text != context.coordinator.lastSyncedText {
                 context.coordinator.lastSyncedText = text

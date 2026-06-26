@@ -1,3 +1,4 @@
+import CGtk
 import Foundation
 import Gtk
 import LumaCore
@@ -77,7 +78,7 @@ final class REPLPane {
     }
 
     private func applyMode() {
-        console.setPromptMarkup(Self.promptMarkup(for: mode, withLabel: true))
+        console.setPromptMarkup(Self.promptMarkup(for: mode))
         console.completionReplacesWholeToken = mode == .r2
     }
 
@@ -100,7 +101,12 @@ final class REPLPane {
         guard newMode != mode else { return }
         mode = newMode
         applyMode()
+        applySessionState()
         engine?.setREPLLanguage(sessionID: sessionID, newMode)
+    }
+
+    private func activePlaceholder() -> String {
+        mode == .r2 ? "Enter an r2 command\u{2026}" : "Enter JavaScript\u{2026}"
     }
 
     private func scheduleDraftSave(_ text: String) {
@@ -112,11 +118,10 @@ final class REPLPane {
         }
     }
 
-    private static func promptMarkup(for language: LumaCore.REPLLanguage, withLabel: Bool) -> String {
+    private static func promptMarkup(for language: LumaCore.REPLLanguage) -> String {
         let color = language == .r2 ? "#3584e4" : "#e5a50a"
         let glyph = language == .r2 ? "\u{00BB}" : "\u{203A}"
-        let content = withLabel ? "\(language == .r2 ? "r2" : "js") \(glyph)" : glyph
-        return "<span foreground=\"\(color)\">\(content)</span>"
+        return "<span foreground=\"\(color)\">\(glyph)</span>"
     }
 
     func applySessionState() {
@@ -128,7 +133,7 @@ final class REPLPane {
 
         let placeholder: String
         if isLive {
-            placeholder = "Enter JavaScript\u{2026}"
+            placeholder = activePlaceholder()
         } else if let session {
             placeholder = inactiveMessage(for: session)
         } else {
@@ -295,16 +300,21 @@ final class REPLPane {
         let prompt = Label(str: "")
         prompt.add(cssClass: "monospace")
         prompt.useMarkup = true
-        prompt.setMarkup(str: Self.promptMarkup(for: cell.language, withLabel: false))
+        prompt.setMarkup(str: Self.promptMarkup(for: cell.language))
         codeRow.append(child: prompt)
-        let codeLabel = Label(str: DisplayTruncation.truncated(cell.code))
+        let codeLabel = Label(str: cell.code)
         codeLabel.add(cssClass: "monospace")
         codeLabel.add(cssClass: "repl-cell-code")
         codeLabel.halign = .start
-        codeLabel.hexpand = true
-        codeLabel.wrap = true
+        codeLabel.xalign = 0
+        codeLabel.wrap = false
         codeLabel.selectable = true
-        codeRow.append(child: codeLabel)
+        let codeScroll = ScrolledWindow()
+        codeScroll.setPolicy(hscrollbarPolicy: GTK_POLICY_AUTOMATIC, vscrollbarPolicy: GTK_POLICY_NEVER)
+        codeScroll.propagateNaturalHeight = true
+        codeScroll.hexpand = true
+        codeScroll.set(child: codeLabel)
+        codeRow.append(child: codeScroll)
         column.append(child: codeRow)
 
         if !Self.isResultEmpty(cell.result) {
@@ -327,15 +337,9 @@ final class REPLPane {
                     resultWidget = makePlainResultLabel(text: format(result: cell.result))
                 }
             case .styled(let styled):
-                let label = Label(str: "")
-                label.add(cssClass: "monospace")
-                label.useMarkup = true
-                label.setMarkup(str: StyledTextPango.markup(for: DisplayTruncation.truncated(styled)))
-                label.halign = .start
-                label.hexpand = true
-                label.wrap = true
-                label.selectable = true
-                resultWidget = label
+                let view = REPLStyledResult(styled)
+                rowKeepers.append(view)
+                resultWidget = view.widget
             case .binary(let data, let meta):
                 let column2 = Box(orientation: .vertical, spacing: 4)
                 column2.hexpand = true
@@ -352,11 +356,13 @@ final class REPLPane {
                 hex.widget.halign = .start
                 column2.append(child: hex.widget)
                 resultWidget = column2
-            case .text:
-                resultWidget = makePlainResultLabel(text: format(result: cell.result))
+            case .text(let s):
+                let view = REPLStyledResult(LumaCore.StyledText(s))
+                rowKeepers.append(view)
+                resultWidget = view.widget
             }
             resultWidget.hexpand = true
-            resultWidget.halign = .start
+            resultWidget.halign = .fill
             resultRow.append(child: resultWidget)
             column.append(child: resultRow)
         }
