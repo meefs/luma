@@ -18,56 +18,68 @@ export function evaluate(
     }
 }
 
+export interface CompletionItem {
+    name: string;
+    callable: boolean;
+}
+
 export function complete(
     code: string,
     cursor: number
-): string[] {
+): CompletionItem[] {
     const context = getContextAtCursor(code, cursor);
     const baseExpr = context.baseExpr;
     const fragment = context.fragment;
 
-    let candidates: string[];
+    let candidates: CompletionItem[];
 
     if (baseExpr !== null) {
-        candidates = memberNames(resolveBase(baseExpr));
+        candidates = memberItems(resolveBase(baseExpr));
     } else {
-        candidates = ownNames(globalThis);
+        candidates = ownItems(globalThis);
     }
 
     if (baseExpr === null && fragment === "") {
         return [];
     }
 
-    const uniq = Array.from(new Set(candidates));
-
-    let filtered = uniq;
+    let filtered = candidates;
 
     if (fragment !== "") {
-        filtered = uniq.filter(name => name.startsWith(fragment));
+        filtered = candidates.filter(item => item.name.startsWith(fragment));
     }
 
     return filtered.slice(0, 256);
 }
 
-function memberNames(base: unknown): string[] {
+function memberItems(base: unknown): CompletionItem[] {
     if (base === null || base === undefined) {
         return [];
     }
 
-    const names = new Set<string>();
+    const seen = new Set<string>();
+    const items: CompletionItem[] = [];
     let object: unknown = base;
     while (object !== null && object !== undefined) {
-        for (const name of ownNames(object)) {
-            names.add(name);
+        for (const item of ownItems(object)) {
+            if (seen.has(item.name)) {
+                continue;
+            }
+            seen.add(item.name);
+            items.push(item);
         }
         object = Object.getPrototypeOf(object);
     }
-    return Array.from(names);
+    return items;
 }
 
-function ownNames(object: unknown): string[] {
+function ownItems(object: unknown): CompletionItem[] {
     try {
-        return Object.getOwnPropertyNames(object as object).map(String);
+        return Object.getOwnPropertyNames(object as object).map(raw => {
+            const name = String(raw);
+            const descriptor = Object.getOwnPropertyDescriptor(object as object, name);
+            return { name, callable: typeof descriptor?.value === "function" };
+        });
     } catch {
         return [];
     }

@@ -896,12 +896,12 @@ public final class ProcessNode: Identifiable {
         do {
             let anyResult = try await script.exports.complete(code, cursor)
 
-            if let strings = anyResult as? [String] {
-                return strings.sorted(by: Self.completionPrecedes).map(annotatedCompletion)
-            }
-
-            if let anyArray = anyResult as? [Any] {
-                return anyArray.compactMap { $0 as? String }.sorted(by: Self.completionPrecedes).map(annotatedCompletion)
+            if let items = anyResult as? [[String: Any]] {
+                let members = items.compactMap { item -> (name: String, callable: Bool)? in
+                    guard let name = item["name"] as? String else { return nil }
+                    return (name, (item["callable"] as? Bool) ?? false)
+                }
+                return members.sorted(by: Self.memberPrecedes).map { annotatedCompletion($0.name) }
             }
         } catch {
             yieldEngineEvent(subsystem: "repl", level: .warning, text: "Failed to fetch REPL completions: \(error)")
@@ -910,11 +910,12 @@ public final class ProcessNode: Identifiable {
         return []
     }
 
-    private static func completionPrecedes(_ a: String, _ b: String) -> Bool {
-        let aUnderscored = a.hasPrefix("_")
-        let bUnderscored = b.hasPrefix("_")
+    private static func memberPrecedes(_ a: (name: String, callable: Bool), _ b: (name: String, callable: Bool)) -> Bool {
+        if a.callable != b.callable { return !a.callable }
+        let aUnderscored = a.name.hasPrefix("_")
+        let bUnderscored = b.name.hasPrefix("_")
         if aUnderscored != bUnderscored { return bUnderscored }
-        return a.lowercased() < b.lowercased()
+        return a.name.lowercased() < b.name.lowercased()
     }
 
     // MARK: - Memory & Symbolication
