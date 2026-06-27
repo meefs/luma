@@ -37,6 +37,8 @@ struct ModuleDetailView: View {
 
             content
         }
+        .padding(.leading, 12)
+        .padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: module.id) {
             guard bundles[module.id] == nil, loadError == nil else { return }

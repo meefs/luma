@@ -26,6 +26,8 @@ protocol InstrumentUI {
         engine: Engine,
         selection: Binding<SidebarItemID?>
     ) -> AnyView
+
+    func hasSidebarChildren(instance: LumaCore.InstrumentInstance) -> Bool
 }
 
 extension InstrumentUI {
@@ -44,5 +46,9 @@ extension InstrumentUI {
         selection: Binding<SidebarItemID?>
     ) -> AnyView {
         AnyView(EmptyView())
+    }
+
+    func hasSidebarChildren(instance: LumaCore.InstrumentInstance) -> Bool {
+        false
     }
 }

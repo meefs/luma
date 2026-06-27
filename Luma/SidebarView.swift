@@ -62,16 +62,23 @@ struct SidebarView: View {
                             .tag(SidebarItemID.repl(session.id))
 
                         ForEach(instruments) { instance in
+                            let hasChildren = hasInstrumentChildren(instance: instance)
+                            let hooksExpanded = engine.hooksExpansion(forSessionID: session.id, instrumentID: instance.id) == .expanded
                             SidebarInstrumentRow(
                                 session: session,
                                 node: node,
                                 instance: instance,
                                 engine: engine,
+                                hasChildren: hasChildren,
+                                isExpanded: hooksExpanded,
+                                onToggle: { toggleHooksExpansion(sessionID: session.id, instrumentID: instance.id) },
                                 selection: $selection
                             )
                             .tag(SidebarItemID.instrument(session.id, instance.id))
 
-                            instrumentChildren(sessionID: session.id, instance: instance)
+                            if hasChildren, hooksExpanded {
+                                instrumentChildren(sessionID: session.id, instance: instance)
+                            }
                         }
 
                         ForEach(insights.sorted(by: { $0.createdAt < $1.createdAt })) { insight in
@@ -197,6 +204,18 @@ struct SidebarView: View {
             )
         }
     }
+
+    private func hasInstrumentChildren(instance: LumaCore.InstrumentInstance) -> Bool {
+        InstrumentUIRegistry.shared.ui(for: instance)?.hasSidebarChildren(instance: instance) ?? false
+    }
+
+    private func toggleHooksExpansion(sessionID: UUID, instrumentID: UUID) {
+        let current = engine.hooksExpansion(forSessionID: sessionID, instrumentID: instrumentID)
+        let next: SidebarExpansion = current == .expanded ? .collapsed : .expanded
+        withAnimation(.easeInOut(duration: 0.18)) {
+            engine.setHooksExpansion(sessionID: sessionID, instrumentID: instrumentID, next)
+        }
+    }
 }
 
 
@@ -303,15 +322,20 @@ private struct SidebarMissionRow: View {
     }
 }
 
-private struct SidebarGroupHeaderRow: View {
-    let title: String
-    let systemImage: String
-    let count: Int
+private struct SidebarDisclosure: View {
     let isExpanded: Bool
+    var canToggle: Bool = true
     let onToggle: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
+        chevron
+            .padding(.leading, sidebarChildIndent - sidebarChevronWidth - sidebarChevronToIconSpacing)
+            .padding(.trailing, sidebarChevronToIconSpacing)
+    }
+
+    @ViewBuilder
+    private var chevron: some View {
+        if canToggle {
             Button(action: onToggle) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
@@ -321,9 +345,23 @@ private struct SidebarGroupHeaderRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.leading, sidebarChildIndent - sidebarChevronWidth - sidebarChevronToIconSpacing)
-            .padding(.trailing, sidebarChevronToIconSpacing)
-            .accessibilityLabel(isExpanded ? "Collapse \(title)" : "Expand \(title)")
+        } else {
+            Color.clear.frame(width: sidebarChevronWidth, height: sidebarChevronWidth)
+        }
+    }
+}
+
+private struct SidebarGroupHeaderRow: View {
+    let title: String
+    let systemImage: String
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SidebarDisclosure(isExpanded: isExpanded, onToggle: onToggle)
+                .accessibilityLabel(isExpanded ? "Collapse \(title)" : "Expand \(title)")
 
             Image(systemName: systemImage)
                 .frame(width: sidebarChildIconWidth, alignment: .center)
@@ -342,6 +380,7 @@ private struct SidebarGroupHeaderRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
     }
 }
 
@@ -707,23 +746,29 @@ private struct SidebarInstrumentRow: View {
     let node: LumaCore.ProcessNode?
     let instance: LumaCore.InstrumentInstance
     let engine: Engine
+    let hasChildren: Bool
+    let isExpanded: Bool
+    let onToggle: () -> Void
     @Binding var selection: SidebarItemID?
 
     @State private var isShowingDeleteConfirm = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 0) {
+            SidebarDisclosure(isExpanded: isExpanded, canToggle: hasChildren, onToggle: onToggle)
+
             InstrumentIconView(icon: descriptor.icon, pointSize: 12)
                 .frame(width: subrowIconWidth, alignment: .center)
+                .padding(.trailing, sidebarIconToLabelSpacing)
             Text(descriptor.displayName)
             if let status = runtimeStatus {
                 InstrumentStatusIndicator(status: status)
+                    .padding(.leading, 6)
             }
             Spacer()
         }
         .font(.callout)
         .contentShape(Rectangle())
-        .padding(.leading, sidebarChildIndent)
         .opacity(instance.state == .enabled ? 1 : 0.3)
         .contextMenu {
             Button {

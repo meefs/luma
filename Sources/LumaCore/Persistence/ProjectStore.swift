@@ -1471,6 +1471,7 @@ public final class ProjectStore: Sendable {
             t.column("sidebar_expansion", .text).notNull().defaults(to: SidebarExpansion.expanded.rawValue)
             t.column("modules_expansion", .text).notNull().defaults(to: SidebarExpansion.expanded.rawValue)
             t.column("threads_expansion", .text).notNull().defaults(to: SidebarExpansion.collapsed.rawValue)
+            t.column("collapsed_hook_instruments", .text).notNull().defaults(to: "[]")
             t.column("detail_section", .text)
             t.column("last_selected_module_id", .text)
             t.column("last_selected_thread_id", .integer)
@@ -1798,6 +1799,7 @@ public final class ProjectStore: Sendable {
         let collapsed = SidebarExpansion.collapsed.rawValue
         try addColumnIfMissing(db, table: "session_ui_state", column: "modules_expansion", definition: "TEXT NOT NULL DEFAULT '\(expanded)'")
         try addColumnIfMissing(db, table: "session_ui_state", column: "threads_expansion", definition: "TEXT NOT NULL DEFAULT '\(collapsed)'")
+        try addColumnIfMissing(db, table: "session_ui_state", column: "collapsed_hook_instruments", definition: "TEXT NOT NULL DEFAULT '[]'")
         try addColumnIfMissing(db, table: "session_ui_state", column: "repl_language", definition: "TEXT NOT NULL DEFAULT '\(javascript)'")
         try addColumnIfMissing(db, table: "session_ui_state", column: "repl_draft", definition: "TEXT")
         try addColumnIfMissing(db, table: "session_ui_state", column: "repl_seek_anchor", definition: "TEXT")

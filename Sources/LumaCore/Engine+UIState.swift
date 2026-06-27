@@ -62,6 +62,15 @@ extension Engine {
         }
     }
 
+    public func setHooksExpansion(sessionID: UUID, instrumentID: UUID, _ expansion: SidebarExpansion) {
+        mutateSessionUIState(sessionID: sessionID) { state in
+            switch expansion {
+            case .expanded: state.collapsedHookInstruments.remove(instrumentID)
+            case .collapsed: state.collapsedHookInstruments.insert(instrumentID)
+            }
+        }
+    }
+
     public func setLastSelectedModuleID(sessionID: UUID, moduleID: String?) {
         mutateSessionUIState(sessionID: sessionID) { $0.lastSelectedModuleID = moduleID }
     }
@@ -108,6 +117,11 @@ extension Engine {
         case .modules: return state?.modulesExpansion ?? .expanded
         case .threads: return state?.threadsExpansion ?? .collapsed
         }
+    }
+
+    public func hooksExpansion(forSessionID sessionID: UUID, instrumentID: UUID) -> SidebarExpansion {
+        let collapsed = sessionUIStates[sessionID]?.collapsedHookInstruments.contains(instrumentID) ?? false
+        return collapsed ? .collapsed : .expanded
     }
 
     public func lastSelectedModuleID(forSessionID sessionID: UUID) -> String? {

@@ -2830,6 +2830,15 @@ final class MainWindow: InstrumentUIHost {
         box.append(child: countLabel)
         groupCountLabels[groupKey(sessionID: sessionID, group: group)] = countLabel
 
+        let click = GestureClick()
+        click.set(button: 1)
+        click.onReleased { [weak self] _, _, _, _ in
+            MainActor.assumeIsolated {
+                self?.toggleGroupExpansion(sessionID: sessionID, group: group)
+            }
+        }
+        row.install(controller: click)
+
         row.set(child: box)
         return row
     }
